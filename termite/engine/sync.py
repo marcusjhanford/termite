@@ -1,7 +1,6 @@
 import hashlib
 from ..config.schema import AccountConfig
 from ..cache.db import get_db_pool
-from ..cache.queries import save_thread_and_message
 from .imap import IMAPConnection
 from ..providers.gmail import GmailProvider
 from ..providers.outlook import OutlookProvider
@@ -40,6 +39,8 @@ class SyncWorker:
 
         messages = await imap.fetch_messages(folder, uids)
         db = await get_db_pool()
+
+        from ..cache.queries import save_thread_and_message
 
         for uid, parsed_msg in messages.items():
             thread_id = self._generate_thread_id(parsed_msg.subject)
