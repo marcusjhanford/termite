@@ -28,7 +28,8 @@ class MainScreen(Screen):
         ]
 
     async def on_mount(self) -> None:
-        self._bindings.bind_many(self.build_bindings(self.app.config))
+        for b in self.build_bindings(self.app.config):
+            self._bindings.bind(b.key, b.action, b.description)
         self.run_worker(self.load_threads("primary"))
 
     def compose(self):
