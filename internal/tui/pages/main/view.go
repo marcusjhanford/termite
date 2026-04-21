@@ -115,6 +115,108 @@ func (m Model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
+// ViewEmbeddedCompose renders the three-pane layout with the message reader on top
+// of the right column and composeView below, sharing that column only (inbox and
+// threads stay full height).
+func (m Model) ViewEmbeddedCompose(composeView string) string {
+	if m.width == 0 || m.height == 0 {
+		return "Loading..."
+	}
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7D56F4")).
+		Background(lipgloss.Color("#1a1a2e"))
+
+	titleDimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#555555")).
+		Background(lipgloss.Color("#1a1a2e"))
+
+	titleText := titleStyle.Render(" termite ")
+	titleSep := titleDimStyle.Render("│")
+	var titleAccount string
+	if len(m.cfg.Accounts) > 0 {
+		titleAccount = titleDimStyle.Render(" " + m.cfg.Accounts[0].Email + " ")
+	}
+	titleLeft := titleText + titleSep + titleAccount
+	titleBarBg := lipgloss.NewStyle().
+		Background(lipgloss.Color("#1a1a2e")).
+		Width(m.width)
+	titleBar := titleBarBg.Render(titleLeft)
+
+	leftW := m.width * leftPct / 100
+	midW := m.width * middlePct / 100
+	rightW := m.width - leftW - midW
+
+	reserved := 1
+	if m.syncStripVisible() {
+		reserved++
+	}
+	if m.commandBar.IsActive() {
+		reserved++
+	}
+	contentH := m.height - reserved
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	baseBorder := lipgloss.RoundedBorder()
+	baseStyle := lipgloss.NewStyle().
+		Border(baseBorder).
+		BorderForeground(lipgloss.Color("#555555"))
+
+	focusedStyle := lipgloss.NewStyle().
+		Border(baseBorder).
+		BorderForeground(lipgloss.Color("#7D56F4"))
+
+	leftPane := m.renderPane("inbox",
+		m.inboxList.View(), leftW-2, contentH-2,
+		m.focus == FocusInboxList, baseStyle, focusedStyle,
+	)
+	midPane := m.renderPane("threads",
+		m.threadList.View(), midW-2, contentH-2,
+		m.focus == FocusThreadList, baseStyle, focusedStyle,
+	)
+
+	borderX, _ := paneBorder.GetFrameSize()
+	innerW := rightW - 2 - borderX
+	if innerW < 1 {
+		innerW = 1
+	}
+	sepW := innerW
+	sepLine := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#555555")).
+		Width(innerW).
+		Render(strings.Repeat("─", sepW))
+
+	msgBlock := lipgloss.NewStyle().Width(innerW).Render(m.messageView.View())
+	rightStack := lipgloss.JoinVertical(lipgloss.Top, msgBlock, sepLine, composeView)
+	rightPane := m.renderPane("message",
+		rightStack, rightW-2, contentH-2,
+		m.focus == FocusMessageView, baseStyle, focusedStyle,
+	)
+
+	panes := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, midPane, rightPane)
+
+	statusLine := m.statusBar.View()
+	commandLine := m.commandBar.View()
+
+	var syncStrip string
+	if m.syncStripVisible() {
+		syncStrip = m.renderSyncProgressStrip()
+	}
+
+	rows := []string{titleBar}
+	if syncStrip != "" {
+		rows = append(rows, syncStrip)
+	}
+	rows = append(rows, panes, statusLine)
+	if commandLine != "" {
+		rows = append(rows, commandLine)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+}
+
 // renderSyncProgressStrip is a single-line indeterminate bar plus account progress.
 func (m Model) renderSyncProgressStrip() string {
 	barW := m.width - 28

@@ -48,6 +48,12 @@ type Model struct {
 	messageView messageview.Model
 	statusBar   statusbar.Model
 	commandBar  commandbar.Model
+
+	// embedCompose: right column is split between message (top) and inline compose (bottom).
+	embedCompose       bool
+	messagePaneInnerH  int
+	composePaneInnerW  int
+	composePaneInnerH  int
 }
 
 // New creates a main page model wired to real components.
@@ -164,6 +170,25 @@ func (m *Model) advanceBackgroundSyncJob() {
 // and consuming key events.
 func (m Model) CommandBarActive() bool {
 	return m.commandBar.IsActive()
+}
+
+// SelectedThreadID returns the focused thread ID, or empty if none.
+func (m Model) SelectedThreadID() string {
+	t := m.threadList.SelectedThread()
+	if t == nil {
+		return ""
+	}
+	return t.ID
+}
+
+// SetEmbedCompose toggles splitting the message column for inline reply/forward compose.
+func (m *Model) SetEmbedCompose(v bool) {
+	m.embedCompose = v
+}
+
+// ComposePaneInnerSize returns the last computed size for the compose stack in the right column.
+func (m Model) ComposePaneInnerSize() (w, h int) {
+	return m.composePaneInnerW, m.composePaneInnerH
 }
 
 // SetCommandNames passes the registered command names to the command bar

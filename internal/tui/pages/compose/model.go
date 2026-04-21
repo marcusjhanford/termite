@@ -42,9 +42,17 @@ type Model struct {
 	emailMatches []string // current filtered matches
 
 	activeField int
+
+	// embedded: compact layout when reply/forward is shown in the message column.
+	embedded bool
 }
 
-// SendMsg is emitted when the user presses Ctrl+Enter to send.
+// SetEmbedded toggles the compact inline layout (vs full-screen centered compose).
+func (m *Model) SetEmbedded(v bool) {
+	m.embedded = v
+}
+
+// SendMsg is emitted when the user presses Cmd/Super+Enter (macOS) or Ctrl+Enter (Windows/Linux).
 type SendMsg struct {
 	To          string
 	Cc          string

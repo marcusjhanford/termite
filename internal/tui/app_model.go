@@ -63,6 +63,9 @@ type appModel struct {
 	showThemePicker bool
 	themeChoices    []themes.ThemeInfo
 	themeCursor     int
+
+	// composeSplit shows the inbox (main) above the compose pane for reply/forward.
+	composeSplit bool
 }
 
 // NewAppModel creates the root application model.
@@ -173,7 +176,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case PageMain:
 			m.mainPage, cmd = m.mainPage.Update(msg)
 		case PageCompose:
-			m.composePage, cmd = m.composePage.Update(msg)
+			if m.composeSplit {
+				m.applyComposeSplitSizes()
+			} else {
+				m.composePage, cmd = m.composePage.Update(msg)
+			}
 		case PageSetup:
 			m.setupPage, cmd = m.setupPage.Update(msg)
 		case PageInboxZero:
@@ -192,7 +199,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case PageMain:
 			m.mainPage, cmd = m.mainPage.Update(msg)
 		case PageCompose:
-			m.composePage, cmd = m.composePage.Update(msg)
+			if m.composeSplit {
+				m.mainPage, cmd = m.mainPage.Update(msg)
+				var c2 tea.Cmd
+				m.composePage, c2 = m.composePage.Update(msg)
+				if c2 != nil {
+					cmds = append(cmds, c2)
+				}
+				m.applyComposeSplitSizes()
+			} else {
+				m.composePage, cmd = m.composePage.Update(msg)
+			}
 		case PageSetup:
 			m.setupPage, cmd = m.setupPage.Update(msg)
 		case PageInboxZero:
@@ -427,7 +444,17 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Escape from overlay pages returns to main.
 		if keyStr == "esc" {
 			switch m.activePage {
-			case PageCompose, PageInboxZero, PageMetrics:
+			case PageCompose:
+				m.composeSplit = false
+				m.mainPage.SetEmbedCompose(false)
+				m.composePage.SetEmbedded(false)
+				m.mainPage, _ = m.mainPage.Update(tea.WindowSizeMsg{
+					Width:  m.width,
+					Height: m.height,
+				})
+				m.activePage = PageMain
+				return m, nil
+			case PageInboxZero, PageMetrics:
 				m.activePage = PageMain
 				return m, nil
 			case PageSetup:
@@ -459,13 +486,13 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.initCompose("new", "")
 				return m, nil
 			case "r":
-				m.initCompose("reply", "")
+				m.initCompose("reply", m.mainPage.SelectedThreadID())
 				return m, nil
 			case "R":
-				m.initCompose("replyall", "")
+				m.initCompose("replyall", m.mainPage.SelectedThreadID())
 				return m, nil
 			case "f":
-				m.initCompose("forward", "")
+				m.initCompose("forward", m.mainPage.SelectedThreadID())
 				return m, nil
 			case "e":
 				return m, m.archiveSelected()
@@ -519,7 +546,11 @@ func (m appModel) View() tea.View {
 	var s string
 	switch m.activePage {
 	case PageCompose:
-		s = m.composePage.View()
+		if m.composeSplit {
+			s = m.mainPage.ViewEmbeddedCompose(m.composePage.View())
+		} else {
+			s = m.composePage.View()
+		}
 	case PageSetup:
 		s = m.setupPage.View()
 	case PageInboxZero:
@@ -709,18 +740,68 @@ func (m appModel) renderThemePicker() string {
 	)
 }
 
+// applyComposeSplitSizes keeps the inbox/thread panes full height and splits only the
+// message column; the compose model receives the bottom slice of that column.
+func (m *appModel) applyComposeSplitSizes() {
+	if m.width == 0 || m.height == 0 {
+		return
+	}
+	m.mainPage.SetEmbedCompose(true)
+	m.mainPage, _ = m.mainPage.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+	cw, ch := m.mainPage.ComposePaneInnerSize()
+	if cw < 1 {
+		cw = 1
+	}
+	if ch < 1 {
+		ch = 1
+	}
+	m.composePage.SetEmbedded(true)
+	m.composePage, _ = m.composePage.Update(tea.WindowSizeMsg{Width: cw, Height: ch})
+}
+
 // initCompose creates a compose page with the given mode, sends it the current
 // window size, and populates email autocomplete from the database.
 func (m *appModel) initCompose(mode, threadID string) {
-	m.composePage = composepage.NewWithMode(mode, threadID)
-	m.composePage, _ = m.composePage.Update(tea.WindowSizeMsg{
-		Width:  m.width,
-		Height: m.height,
-	})
+	needsThread := mode != "new"
+	if needsThread && threadID == "" {
+		m.statusMsg = "Select a thread first"
+		return
+	}
+
+	var latest *db.Message
+	if threadID != "" && m.db != nil {
+		if dbMsgs, err := m.db.GetThreadMessages(threadID); err == nil && len(dbMsgs) > 0 {
+			last := dbMsgs[len(dbMsgs)-1]
+			latest = &last
+		}
+	}
+	if needsThread && latest == nil {
+		m.statusMsg = "Could not load thread messages"
+		return
+	}
+
+	emails := make([]string, 0, len(m.cfg.Accounts))
+	for i := range m.cfg.Accounts {
+		emails = append(emails, m.cfg.Accounts[i].Email)
+	}
+
+	m.composePage = composepage.FromThreadDraft(mode, threadID, latest, emails)
+	m.composeSplit = needsThread
+
+	if m.composeSplit {
+		m.applyComposeSplitSizes()
+	} else {
+		m.composePage.SetEmbedded(false)
+		m.mainPage.SetEmbedCompose(false)
+		m.composePage, _ = m.composePage.Update(tea.WindowSizeMsg{
+			Width:  m.width,
+			Height: m.height,
+		})
+	}
 	// Populate email autocomplete from known addresses.
 	if m.db != nil {
-		if emails, err := m.db.GetKnownEmails(500); err == nil {
-			m.composePage.SetKnownEmails(emails)
+		if known, err := m.db.GetKnownEmails(500); err == nil {
+			m.composePage.SetKnownEmails(known)
 		}
 	}
 	m.activePage = PageCompose
@@ -739,7 +820,11 @@ func (m *appModel) sendSizeToActivePage() {
 	case PageMain:
 		m.mainPage, _ = m.mainPage.Update(sizeMsg)
 	case PageCompose:
-		m.composePage, _ = m.composePage.Update(sizeMsg)
+		if m.composeSplit {
+			m.applyComposeSplitSizes()
+		} else {
+			m.composePage, _ = m.composePage.Update(sizeMsg)
+		}
 	case PageSetup:
 		m.setupPage, _ = m.setupPage.Update(sizeMsg)
 	case PageInboxZero:

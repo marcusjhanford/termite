@@ -20,6 +20,10 @@ func (m Model) View() string {
 		return m.filePickerView()
 	}
 
+	if m.embedded {
+		return m.viewEmbedded()
+	}
+
 	formWidth := clamp(m.width-4, 40, 80)
 	inputWidth := formWidth - 16 // account for label width + padding + borders
 
@@ -138,24 +142,13 @@ func (m Model) View() string {
 			bodyLines = bodyLines[len(bodyLines)-maxBodyLines:]
 		}
 
-		var renderedBody []string
+		colSpacer := lipgloss.NewStyle().Width(10).Render("")
 		for i, line := range bodyLines {
 			if i == 0 {
+				rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, label, inp.Render(line)))
 				continue
 			}
-			renderedBody = append(renderedBody, inp.Render(line))
-		}
-
-		firstLine := ""
-		if len(bodyLines) > 0 {
-			firstLine = bodyLines[0]
-		}
-		firstRow := lipgloss.JoinHorizontal(lipgloss.Top, label, inp.Render(firstLine))
-		rows = append(rows, firstRow)
-
-		indent := strings.Repeat(" ", 11)
-		for _, rl := range renderedBody {
-			rows = append(rows, indent+rl)
+			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, colSpacer, inp.Render(line)))
 		}
 	}
 
@@ -178,7 +171,7 @@ func (m Model) View() string {
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#666666")).
 		MarginTop(1)
-	rows = append(rows, helpStyle.Render("Tab next field | Enter newline (body) | Ctrl+A attach | Ctrl+Enter send | Esc cancel"))
+	rows = append(rows, helpStyle.Render("Tab next field | Enter newline (body) | Ctrl+A attach | ⌘/Ctrl+Enter send | Esc cancel"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
@@ -194,6 +187,145 @@ func (m Model) View() string {
 		lipgloss.Center, lipgloss.Center,
 		boxStyle.Render(content),
 	)
+}
+
+// viewEmbedded is a dense top-aligned layout for the message-column reply area.
+func (m Model) viewEmbedded() string {
+	labelW := 8
+	inputW := m.width - labelW - 2
+	if inputW < 8 {
+		inputW = 8
+	}
+
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7D56F4"))
+
+	labelStyle := lipgloss.NewStyle().
+		Width(labelW).
+		Foreground(lipgloss.Color("#ABABAB")).
+		Align(lipgloss.Right).
+		PaddingRight(1)
+
+	activeLabelStyle := lipgloss.NewStyle().
+		Width(labelW).
+		Foreground(lipgloss.Color("#7D56F4")).
+		Bold(true).
+		Align(lipgloss.Right).
+		PaddingRight(1)
+
+	inputBg := lipgloss.Color("#1e1e2e")
+
+	inputStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#cccccc")).
+		Background(inputBg).
+		Width(inputW)
+
+	activeInputStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Background(inputBg).
+		Width(inputW)
+
+	hintStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#555555")).
+		Background(inputBg)
+
+	separatorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#444444"))
+
+	cursor := "\u2588"
+
+	title := titleStyle.Render(modeTitle(m.mode))
+
+	fields := []struct {
+		label string
+		value string
+		idx   int
+	}{
+		{"To:", m.to, fieldTo},
+		{"Cc:", m.cc, fieldCc},
+		{"Bcc:", m.bcc, fieldBcc},
+		{"Subject:", m.subject, fieldSubject},
+	}
+
+	var rows []string
+	rows = append(rows, title)
+
+	for _, f := range fields {
+		isActive := m.activeField == f.idx
+		lbl := labelStyle
+		inp := inputStyle
+		if isActive {
+			lbl = activeLabelStyle
+			inp = activeInputStyle
+		}
+		label := lbl.Render(f.label)
+		val := f.value
+		if isActive {
+			if isEmailField(f.idx) && len(m.emailMatches) > 0 && strings.HasPrefix(strings.ToLower(m.emailMatches[0]), strings.ToLower(f.value)) {
+				remaining := m.emailMatches[0][len(f.value):]
+				val = val + cursor + hintStyle.Render(remaining)
+				rawInp := activeInputStyle.Copy().UnsetWidth()
+				rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, label, rawInp.Render(val)))
+				continue
+			}
+			val += cursor
+		}
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, label, inp.Render(val)))
+	}
+
+	rows = append(rows, separatorStyle.Render(strings.Repeat("─", clamp(m.width-2, 6, inputW+labelW))))
+
+	// Body
+	{
+		isActive := m.activeField == fieldBody
+		lbl := labelStyle
+		inp := inputStyle
+		if isActive {
+			lbl = activeLabelStyle
+			inp = activeInputStyle
+		}
+		label := lbl.Render("Body:")
+		bodyVal := m.body
+		if isActive {
+			bodyVal += cursor
+		}
+		bodyLines := strings.Split(bodyVal, "\n")
+		maxBodyLines := m.height - 10
+		if maxBodyLines < 2 {
+			maxBodyLines = 2
+		}
+		if len(bodyLines) > maxBodyLines {
+			bodyLines = bodyLines[len(bodyLines)-maxBodyLines:]
+		}
+		colSpacer := lipgloss.NewStyle().Width(labelW).Render("")
+		for i, line := range bodyLines {
+			if i == 0 {
+				rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, label, inp.Render(line)))
+				continue
+			}
+			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, colSpacer, inp.Render(line)))
+		}
+	}
+
+	if len(m.attachments) > 0 {
+		rows = append(rows, "")
+		attStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#58a6ff"))
+		for _, path := range m.attachments {
+			rows = append(rows, attStyle.Render("  "+path))
+		}
+	}
+
+	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
+	rows = append(rows, helpStyle.Render("Tab • Enter • ⌘/Ctrl+Enter send • Esc"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
+
+	return lipgloss.NewStyle().
+		Width(m.width).
+		MaxHeight(m.height).
+		Padding(0, 1).
+		Render(content)
 }
 
 // filePickerView renders the in-TUI file browser overlay.

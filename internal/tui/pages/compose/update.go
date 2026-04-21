@@ -40,11 +40,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 
 		keyStr := msg.String()
+		k := msg.Key()
 
 		// --- Normal compose mode ---
 
-		// Ctrl+Enter sends the message.
-		if keyStr == "ctrl+enter" {
+		// Cmd/Super/Meta+Enter (macOS) or Ctrl+Enter (Windows/Linux) sends the message.
+		if isSendComposerKey(k, keyStr) {
 			return m, m.sendCmd()
 		}
 
@@ -88,6 +89,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Alt/Ctrl/Cmd/Super + Backspace: delete last word (same as Superhuman-style clients).
+		if isModifierBackspace(k) {
+			m.setActiveValue(deleteWordBackward(m.activeValue()))
+			m.updateEmailMatches()
+			return m, nil
+		}
+
 		// Backspace.
 		if keyStr == "backspace" {
 			m.deleteCharFromActive()
@@ -96,8 +104,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 
 		// Regular character input — single printable character or space.
-		if len(keyStr) == 1 || keyStr == " " {
-			m.appendToActive(keyStr)
+		// Bubble Tea v2 reports the space key as "space", not " ".
+		if len(keyStr) == 1 || keyStr == " " || keyStr == "space" {
+			ch := keyStr
+			if keyStr == "space" {
+				ch = " "
+			}
+			m.appendToActive(ch)
 			m.updateEmailMatches()
 			return m, nil
 		}

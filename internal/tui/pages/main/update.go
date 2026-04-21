@@ -200,7 +200,32 @@ func (m *Model) propagateSizes() {
 
 	m.inboxList.SetSize(inboxInnerW, paneInnerH)
 	m.threadList.SetSize(threadInnerW, paneInnerH)
-	m.messageView.SetSize(msgInnerW, paneInnerH)
+
+	if m.embedCompose {
+		// Reserve the bottom of the message column for inline compose.
+		sep := 1
+		msgPart := paneInnerH * 48 / 100
+		if msgPart < 4 {
+			msgPart = 4
+		}
+		composePart := paneInnerH - msgPart - sep
+		if composePart < 6 {
+			composePart = 6
+			msgPart = paneInnerH - sep - composePart
+			if msgPart < 3 {
+				msgPart = 3
+			}
+		}
+		m.messagePaneInnerH = msgPart
+		m.composePaneInnerW = msgInnerW
+		m.composePaneInnerH = composePart
+		m.messageView.SetSize(msgInnerW, msgPart)
+	} else {
+		m.messagePaneInnerH = paneInnerH
+		m.composePaneInnerW = 0
+		m.composePaneInnerH = 0
+		m.messageView.SetSize(msgInnerW, paneInnerH)
+	}
 	m.statusBar.SetWidth(m.width)
 	m.commandBar.SetWidth(m.width)
 }
