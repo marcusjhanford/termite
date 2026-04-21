@@ -1,0 +1,90 @@
+# Official binaries inject the Google OAuth client secret at link time (never from git).
+#
+# Repository secret (Settings → Secrets and variables → Actions):
+#   GMAIL_OAUTH_CLIENT_SECRET — "Client secret" from the same Google Cloud
+#   OAuth client as defaultGmailClientID (Desktop app). Injected via:
+#     -X github.com/termite-mail/termite/internal/providers.ReleaseGmailOAuthClientSecret=...
+#
+# Local development: use TERMITE_GMAIL_CLIENT_SECRET (or other TERMITE_GMAIL_* env vars)
+# instead; this workflow is only for tagged releases and manual release builds.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+          GMAIL_OAUTH_CLIENT_SECRET: ${{ secrets.GMAIL_OAUTH_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GMAIL_OAUTH_CLIENT_SECRET}" ]; then
+            echo "::error::Missing repository secret GMAIL_OAUTH_CLIENT_SECRET. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          OUT="termite-${GOOS}-${GOARCH}"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/termite-mail/termite/internal/providers.ReleaseGmailOAuthClientSecret=${GMAIL_OAUTH_CLIENT_SECRET}" \
+            -o "$OUT" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: termite-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: termite-${{ matrix.goos }}-${{ matrix.goarch }}
+
+  publish:
+    needs: [build]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: termite-*
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          mapfile -t bins < <(find dist -type f)
+          if [ "${#bins[@]}" -eq 0 ]; then
+            echo "::error::No binaries under dist/ after downloading artifacts"
+            exit 1
+          fi
+          gh release create "$TAG" --generate-notes "${bins[@]}"

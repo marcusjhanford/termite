@@ -1,0 +1,52 @@
+name = "light"
+
+# Backgrounds
+background       = "#ffffff"
+surface          = "#f6f8fa"
+surface_alt      = "#eaeef2"
+surface_highlight = "#dde2e8"
+
+# Accents
+primary   = "#0969da"
+secondary = "#1a7f37"
+accent    = "#8250df"
+
+# Text
+text       = "#1f2328"
+text_muted = "#656d76"
+text_dim   = "#8c959f"
+
+# Unread state
+unread_indicator = "#0969da"
+unread_subject   = "#1f2328"
+read_subject     = "#656d76"
+read_preview     = "#8c959f"
+
+# Chrome
+border         = "#d0d7de"
+border_focus   = "#0969da"
+selection      = "#ddf4ff"
+selection_text = "#1f2328"
+status_bar_bg  = "#f6f8fa"
+status_bar_text = "#656d76"
+command_bar_bg  = "#eaeef2"
+command_border  = "#0969da"
+
+# Semantic
+success = "#1a7f37"
+warning = "#9a6700"
+danger  = "#cf222e"
+info    = "#0969da"
+
+[forest]
+trunk_chars   = ["│", "┃", "║"]
+branch_chars  = ["─", "╌", "┄"]
+leaf_chars    = ["🌿", "🍃", "☘"]
+ground_chars  = ["░", "▒", "▓"]
+trunk_color   = "#8b6914"
+branch_color  = "#6e4a2e"
+leaf_color_1  = "#1a7f37"
+leaf_color_2  = "#2da44e"
+leaf_color_3  = "#116329"
+ground_color  = "#dafbe1"
+firefly_color = "#bf8700"
