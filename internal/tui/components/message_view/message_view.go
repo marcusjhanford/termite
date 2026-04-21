@@ -8,16 +8,20 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/termite-mail/termite/internal/tui/linefmt"
+	"github.com/termite-mail/termite/internal/tui/mailrender"
 )
 
 // Model is the right-pane message content viewer.
 type Model struct {
-	headers string
-	body    string
-	scrollY int
-	focused bool
-	width   int
-	height  int
+	headers   string
+	body      string
+	bodyHTML  string
+	bodyLines []string
+	bodyANSI  bool
+	scrollY   int
+	focused   bool
+	width     int
+	height    int
 }
 
 // New creates an empty message view model.
@@ -103,8 +107,10 @@ func (m Model) View() string {
 		bodyHeight = 1
 	}
 
-	// Split body into lines (wrapped to pane width) and apply scroll.
-	bodyLines := m.wrappedBodyLines()
+	bodyLines := m.bodyLines
+	if bodyLines == nil {
+		bodyLines = []string{""}
+	}
 
 	// Clamp scroll.
 	if m.scrollY > len(bodyLines)-bodyHeight {
@@ -122,7 +128,11 @@ func (m Model) View() string {
 
 	visibleBody := bodyLines[m.scrollY:end]
 	for _, line := range visibleBody {
-		rows = append(rows, bodyStyle.Render(line))
+		if m.bodyANSI {
+			rows = append(rows, line)
+		} else {
+			rows = append(rows, bodyStyle.Render(line))
+		}
 	}
 
 	// Scroll indicator.
@@ -142,8 +152,9 @@ func (m Model) View() string {
 		Render(content)
 }
 
-// SetMessage sets the message to display.
-func (m *Model) SetMessage(from, to, subject, date, body string) {
+// SetMessage sets the message to display. bodyHTML is optional; when non-empty
+// after trim, it is sanitized and rendered as styled terminal text.
+func (m *Model) SetMessage(from, to, subject, date, body, bodyHTML string) {
 	var headerParts []string
 	headerParts = append(headerParts, "From: "+from)
 	headerParts = append(headerParts, "To: "+linefmt.FormatJSONStringList(to))
@@ -151,7 +162,9 @@ func (m *Model) SetMessage(from, to, subject, date, body string) {
 	headerParts = append(headerParts, "Date: "+date)
 	m.headers = strings.Join(headerParts, "\n")
 	m.body = body
+	m.bodyHTML = bodyHTML
 	m.scrollY = 0
+	m.rebuildBody()
 }
 
 // SetFocused sets whether this component is focused.
@@ -163,6 +176,7 @@ func (m *Model) SetFocused(focused bool) {
 func (m *Model) SetSize(w, h int) {
 	m.width = w
 	m.height = h
+	m.rebuildBody()
 }
 
 func (m *Model) scrollDown() {
@@ -186,15 +200,15 @@ func (m Model) bodyWrapWidth() int {
 	return w
 }
 
-func (m Model) wrappedBodyLines() []string {
-	if m.body == "" {
-		return []string{""}
-	}
-	return strings.Split(linefmt.WrapPlainText(m.body, m.bodyWrapWidth()), "\n")
+func (m *Model) rebuildBody() {
+	m.bodyLines, m.bodyANSI = mailrender.RenderBodyLines(m.bodyHTML, m.body, m.bodyWrapWidth())
 }
 
 func (m Model) maxScroll() int {
-	bodyLines := m.wrappedBodyLines()
+	bodyLines := m.bodyLines
+	if bodyLines == nil {
+		bodyLines = []string{""}
+	}
 	// Reserve space for headers (4 lines) + separator (1 line).
 	bodyHeight := m.height - 5
 	if bodyHeight < 1 {

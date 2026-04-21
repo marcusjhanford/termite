@@ -45,7 +45,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		if msg.String() == "esc" && m.searchResultsActive {
 			m.searchResultsActive = false
 			m.loadThreadsForInbox(m.activeInboxID)
-			m.messageView.SetMessage("", "", "", "", "")
+			m.messageView.SetMessage("", "", "", "", "", "")
 			return m, nil
 		}
 
@@ -292,6 +292,7 @@ func (m *Model) loadMessageForThread(threadID string) {
 		latest.Subject,
 		formatMessageDateTime(latest.Date),
 		latest.BodyText,
+		latest.BodyHTML,
 	)
 
 	// Mark thread as read.
