@@ -102,8 +102,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 		default:
 			// Append printable characters.
-			if len(keyStr) == 1 || keyStr == " " {
-				m.input += keyStr
+			// Bubble Tea v2 reports the space key as "space", not " ".
+			if len(keyStr) == 1 || keyStr == " " || keyStr == "space" {
+				ch := keyStr
+				if keyStr == "space" {
+					ch = " "
+				}
+				m.input += ch
 				m.updateMatches()
 			}
 			return m, nil

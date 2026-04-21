@@ -43,6 +43,9 @@ type Model struct {
 
 	activeInboxID string
 
+	// searchResultsActive is true after an FTS search until the user clears it (Esc) or reloads the inbox.
+	searchResultsActive bool
+
 	inboxList   inboxlist.Model
 	threadList  threadlist.Model
 	messageView messageview.Model

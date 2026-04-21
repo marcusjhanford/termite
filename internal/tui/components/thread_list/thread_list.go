@@ -16,6 +16,9 @@ const (
 	threadCardScreenLines = 2
 	threadDividerLines    = 1
 	threadSlotScreenLines = threadCardScreenLines + threadDividerLines
+	// threadDateCol reserves the right edge so relative times (e.g. "12mo") are not
+	// clipped when clipOneLine trims the row to pane width.
+	threadDateCol = 7
 )
 
 // ThreadItem represents a single thread entry.
@@ -169,9 +172,9 @@ func (m Model) buildThreadCard(i int) string {
 	sender := linefmt.FormatJSONStringList(thread.Sender)
 	sender = linefmt.CollapseWhitespace(sender)
 	subject := linefmt.CollapseWhitespace(thread.Subject)
-	date := dateStyle.Render(thread.Date)
 
-	rest := m.width - 2 - lipgloss.Width(indicator) - lipgloss.Width(date) -
+	// Budget for sender/subject: full width minus reserved date column (see clipOneLine).
+	rest := m.width - 2 - lipgloss.Width(indicator) - threadDateCol -
 		lipgloss.Width(msgCount) - lipgloss.Width(attachment) - 4
 	if rest < 12 {
 		rest = 12
@@ -189,8 +192,22 @@ func (m Model) buildThreadCard(i int) string {
 	sender = linefmt.TruncateDisplayWidth(sender, leftBudget)
 	subject = linefmt.TruncateDisplayWidth(subject, rightBudget)
 
-	line1 := fmt.Sprintf(" %s %s — %s%s%s  %s",
-		indicator, sender, subject, msgCount, attachment, date)
+	ds := dateStyle
+	if i == m.selected {
+		// Selected row uses a colored background; brighten the date for contrast.
+		ds = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C8C8D0"))
+	}
+	date := ds.Width(threadDateCol).Align(lipgloss.Right).Render(thread.Date)
+
+	leftMax := m.width - threadDateCol
+	if leftMax < 1 {
+		leftMax = 1
+	}
+	leftJoin := fmt.Sprintf(" %s %s — %s%s%s ", indicator, sender, subject, msgCount, attachment)
+	leftBlock := lipgloss.NewStyle().MaxWidth(leftMax).Render(leftJoin)
+
+	line1 := lipgloss.JoinHorizontal(lipgloss.Top, leftBlock, date)
 
 	snippet := linefmt.CollapseWhitespace(thread.Snippet)
 	snippet = linefmt.TruncateDisplayWidth(snippet, m.width-6)

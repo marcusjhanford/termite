@@ -42,6 +42,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 
+		if msg.String() == "esc" && m.searchResultsActive {
+			m.searchResultsActive = false
+			m.loadThreadsForInbox(m.activeInboxID)
+			m.messageView.SetMessage("", "", "", "", "")
+			return m, nil
+		}
+
 		switch msg.String() {
 		case "tab":
 			m.setFocus((m.focus + 1) % numZones)
@@ -236,6 +243,8 @@ func (m *Model) loadThreadsForInbox(inboxID string) {
 		return
 	}
 
+	m.searchResultsActive = false
+
 	dbThreads, err := m.database.GetThreads(inboxID, 100)
 	if err != nil {
 		slog.Warn("failed to load threads", "inbox", inboxID, "err", err)
@@ -249,7 +258,7 @@ func (m *Model) loadThreadsForInbox(inboxID string) {
 			Subject:       t.Subject,
 			Sender:        t.Participants,
 			Snippet:       t.Snippet,
-			Date:          formatTimestamp(t.LastMessageAt),
+			Date:          formatRelativeAge(t.LastMessageAt),
 			MessageCount:  t.MessageCount,
 			UnreadCount:   t.UnreadCount,
 			HasAttachment: t.HasAttachment,
@@ -281,7 +290,7 @@ func (m *Model) loadMessageForThread(threadID string) {
 		latest.FromAddr,
 		latest.ToAddrs,
 		latest.Subject,
-		formatTimestamp(latest.Date),
+		formatMessageDateTime(latest.Date),
 		latest.BodyText,
 	)
 
@@ -326,11 +335,12 @@ func (m *Model) searchThreads(query string) tea.Cmd {
 			Subject: msg.Subject,
 			Sender:  msg.FromAddr,
 			Snippet: msg.BodyText,
-			Date:    formatTimestamp(msg.Date),
+			Date:    formatRelativeAge(msg.Date),
 		})
 	}
 
 	m.threadList.SetThreads(items)
+	m.searchResultsActive = true
 	return nil
 }
 
@@ -361,22 +371,51 @@ func (m *Model) refreshMetrics() {
 	m.statusBar.SetMetrics(summary.Cleared, streak)
 }
 
-// formatTimestamp converts a Unix timestamp to a human-readable string.
-func formatTimestamp(ts int64) string {
+// formatRelativeAge returns a compact “how long ago” string for thread rows (e.g. "45s", "3h", "1d", "2w").
+func formatRelativeAge(ts int64) string {
 	if ts == 0 {
 		return ""
 	}
 	t := time.Unix(ts, 0)
-	now := time.Now()
+	d := time.Since(t)
+	if d < 0 {
+		d = 0
+	}
+	s := int64(d.Seconds())
+	switch {
+	case s < 60:
+		return fmt.Sprintf("%ds", s)
+	case s < 3600:
+		return fmt.Sprintf("%dm", s/60)
+	case s < 24*3600:
+		return fmt.Sprintf("%dh", s/3600)
+	}
+	days := s / (24 * 3600)
+	switch {
+	case days < 7:
+		return fmt.Sprintf("%dd", days)
+	case days < 30:
+		return fmt.Sprintf("%dw", days/7)
+	case days < 365:
+		mo := days / 30
+		if mo < 1 {
+			mo = 1
+		}
+		return fmt.Sprintf("%dmo", mo)
+	default:
+		y := days / 365
+		if y < 1 {
+			y = 1
+		}
+		return fmt.Sprintf("%dy", y)
+	}
+}
 
-	// If today, show time only.
-	if t.Year() == now.Year() && t.YearDay() == now.YearDay() {
-		return t.Format("3:04 PM")
+// formatMessageDateTime formats a Unix instant as local calendar date and time for the message header.
+func formatMessageDateTime(ts int64) string {
+	if ts == 0 {
+		return ""
 	}
-	// If this year, show month and day.
-	if t.Year() == now.Year() {
-		return t.Format("Jan 2")
-	}
-	// Otherwise show full date.
-	return t.Format("Jan 2, 2006")
+	t := time.Unix(ts, 0).In(time.Local)
+	return t.Format("Mon, Jan 2, 2006 3:04 PM")
 }
