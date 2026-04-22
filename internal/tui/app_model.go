@@ -10,6 +10,7 @@ import (
 
 	"github.com/termite-mail/termite/internal/config"
 	"github.com/termite-mail/termite/internal/db"
+	"github.com/termite-mail/termite/internal/debuglog"
 	"github.com/termite-mail/termite/internal/engine"
 	"github.com/termite-mail/termite/internal/metrics"
 	"github.com/termite-mail/termite/internal/themes"
@@ -245,7 +246,21 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
 
+	case msgs.ReloadInboxMsg:
+		var cmd tea.Cmd
+		m.mainPage, cmd = m.mainPage.Update(msg)
+		return m, cmd
+
 	case msgs.InboxZeroMsg:
+		accountID := msg.AccountID
+		if accountID == "" && len(m.cfg.Accounts) > 0 {
+			accountID = m.cfg.Accounts[0].ID
+		}
+		if m.metrics != nil && accountID != "" {
+			if err := m.metrics.RecordInboxZero(accountID); err != nil {
+				slog.Warn("record inbox zero metric", "err", err)
+			}
+		}
 		// Create a fresh inbox zero page with the current theme and switch to it.
 		m.inboxZeroPage = inboxzeropage.New(m.themes.Current())
 		m.activePage = PageInboxZero
@@ -260,6 +275,32 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case msgs.ComposeMsg:
 		m.initCompose(msg.Mode, msg.ThreadID)
+		return m, nil
+
+	case composepage.SendMsg:
+		return m, m.mailSendCmd(msg)
+
+	case msgs.MailSendResultMsg:
+		if msg.Err != nil {
+			m.statusMsg = "Send failed: " + msg.Err.Error()
+			return m, nil
+		}
+		// #region agent log
+		debuglog.AgentLog("H4-fix", "app_model:MailSendResultMsg", "send completed", map[string]any{
+			"accountID": msg.AccountID,
+		})
+		// #endregion
+		m.statusMsg = "Message sent"
+		if m.metrics != nil && msg.AccountID != "" {
+			if err := m.metrics.RecordSent(msg.AccountID); err != nil {
+				slog.Warn("record sent metric", "err", err)
+			}
+		}
+		m.composeSplit = false
+		m.mainPage.SetEmbedCompose(false)
+		m.composePage.SetEmbedded(false)
+		m.activePage = PageMain
+		m.sendSizeToActivePage()
 		return m, nil
 
 	case msgs.NavigateMsg:
@@ -495,6 +536,11 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.initCompose("forward", m.mainPage.SelectedThreadID())
 				return m, nil
 			case "e":
+				// #region agent log
+				debuglog.AgentLog("H6", "app_model:key e", "archive key pressed", map[string]any{
+					"selectedID": m.mainPage.SelectedThreadID(),
+				})
+				// #endregion
 				return m, m.archiveSelected()
 			case "#":
 				return m, m.deleteSelected()
@@ -648,8 +694,8 @@ func (m appModel) renderHelp() string {
 
 	lines = append(lines, sectionStyle.Render("Other"))
 	lines = append(lines, row("?", "Toggle this help"))
-		lines = append(lines, row("q", "Quit (main inbox only)"))
-		lines = append(lines, row("Ctrl+C", "Quit (anywhere)"))
+	lines = append(lines, row("q", "Quit (main inbox only)"))
+	lines = append(lines, row("Ctrl+C", "Quit (anywhere)"))
 
 	lines = append(lines, "")
 	lines = append(lines, dimStyle.Render("Press any key to dismiss"))
@@ -834,18 +880,54 @@ func (m *appModel) sendSizeToActivePage() {
 	}
 }
 
+// mailSendCmd sends the compose draft via SMTP using the first configured account.
+func (m *appModel) mailSendCmd(draft composepage.SendMsg) tea.Cmd {
+	if len(m.cfg.Accounts) == 0 {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "No account configured"}
+		}
+	}
+	acctCfg := m.cfg.Accounts[0]
+	acct, err := engine.NewAccount(acctCfg)
+	if err != nil {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "Send failed: " + err.Error()}
+		}
+	}
+	return func() tea.Msg {
+		err := engine.SendComposeSMTP(
+			acct,
+			acctCfg.Email,
+			draft.To,
+			draft.Cc,
+			draft.Bcc,
+			draft.Subject,
+			draft.Body,
+			draft.Attachments,
+		)
+		return msgs.MailSendResultMsg{Err: err, AccountID: acctCfg.ID}
+	}
+}
+
 // archiveSelected archives the currently selected thread and refreshes.
 func (m *appModel) archiveSelected() tea.Cmd {
 	if m.db == nil {
 		return nil
 	}
-	// The main page's thread list manages the selected thread internally.
-	// We trigger the archive through the DB using the thread list's selection,
-	// but since the threadList is unexported, we send a status message and
-	// let the main page refresh via a SyncDoneMsg-style reload.
-	// For now, emit a status and forward a refresh.
+	id := m.mainPage.SelectedThreadID()
+	if id == "" {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "No thread selected"}
+		}
+	}
+	if err := m.db.ArchiveThread(id); err != nil {
+		slog.Warn("failed to archive thread", "thread", id, "err", err)
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "Archive failed: " + err.Error()}
+		}
+	}
 	return func() tea.Msg {
-		return msgs.StatusMsg{Text: "Archive: select a thread first (use main page actions)"}
+		return msgs.ReloadInboxMsg{}
 	}
 }
 
@@ -854,8 +936,20 @@ func (m *appModel) deleteSelected() tea.Cmd {
 	if m.db == nil {
 		return nil
 	}
+	id := m.mainPage.SelectedThreadID()
+	if id == "" {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "No thread selected"}
+		}
+	}
+	if err := m.db.DeleteThread(id); err != nil {
+		slog.Warn("failed to delete thread", "thread", id, "err", err)
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "Delete failed: " + err.Error()}
+		}
+	}
 	return func() tea.Msg {
-		return msgs.StatusMsg{Text: "Delete: select a thread first (use main page actions)"}
+		return msgs.ReloadInboxMsg{}
 	}
 }
 
@@ -864,55 +958,19 @@ func (m *appModel) markSelectedRead() tea.Cmd {
 	if m.db == nil {
 		return nil
 	}
-	return func() tea.Msg {
-		return msgs.StatusMsg{Text: "Mark read: select a thread first (use main page actions)"}
-	}
-}
-
-// archiveThread archives a thread by ID and returns a refresh command.
-func (m *appModel) archiveThread(threadID string) tea.Cmd {
-	if m.db == nil || threadID == "" {
-		return nil
-	}
-	if err := m.db.ArchiveThread(threadID); err != nil {
-		slog.Warn("failed to archive thread", "thread", threadID, "err", err)
+	id := m.mainPage.SelectedThreadID()
+	if id == "" {
 		return func() tea.Msg {
-			return msgs.StatusMsg{Text: "Archive failed: " + err.Error()}
+			return msgs.StatusMsg{Text: "No thread selected"}
 		}
 	}
-	return func() tea.Msg {
-		return msgs.StatusMsg{Text: "Thread archived"}
-	}
-}
-
-// deleteThread deletes a thread by ID and returns a refresh command.
-func (m *appModel) deleteThread(threadID string) tea.Cmd {
-	if m.db == nil || threadID == "" {
-		return nil
-	}
-	if err := m.db.DeleteThread(threadID); err != nil {
-		slog.Warn("failed to delete thread", "thread", threadID, "err", err)
-		return func() tea.Msg {
-			return msgs.StatusMsg{Text: "Delete failed: " + err.Error()}
-		}
-	}
-	return func() tea.Msg {
-		return msgs.StatusMsg{Text: "Thread deleted"}
-	}
-}
-
-// markThreadRead marks a thread as read by ID.
-func (m *appModel) markThreadRead(threadID string) tea.Cmd {
-	if m.db == nil || threadID == "" {
-		return nil
-	}
-	if err := m.db.MarkThreadRead(threadID); err != nil {
-		slog.Warn("failed to mark thread read", "thread", threadID, "err", err)
+	if err := m.db.MarkThreadRead(id); err != nil {
+		slog.Warn("failed to mark thread read", "thread", id, "err", err)
 		return func() tea.Msg {
 			return msgs.StatusMsg{Text: "Mark read failed: " + err.Error()}
 		}
 	}
 	return func() tea.Msg {
-		return msgs.StatusMsg{Text: "Thread marked as read"}
+		return msgs.ReloadInboxMsg{}
 	}
 }

@@ -44,9 +44,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 		if msg.String() == "esc" && m.searchResultsActive {
 			m.searchResultsActive = false
-			m.loadThreadsForInbox(m.activeInboxID)
+			m.lastSearchQuery = ""
+			cmd := m.loadThreadsForInbox(m.activeInboxID)
 			m.messageView.SetMessage("", "", "", "", "", "")
-			return m, nil
+			return m, cmd
 		}
 
 		switch msg.String() {
@@ -70,24 +71,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case inboxlist.InboxSelectedMsg:
 		m.activeInboxID = msg.InboxID
-		m.loadThreadsForInbox(msg.InboxID)
+		cmd := m.loadThreadsForInbox(msg.InboxID)
 		m.statusBar.SetInbox(msg.InboxID)
-		m.refreshUnreadCount()
-		return m, nil
+		return m, cmd
 
 	case threadlist.ThreadSelectedMsg:
-		m.loadMessageForThread(msg.ThreadID)
-		return m, nil
+		cmd := m.loadMessageForThread(msg.ThreadID, msg.MarkRead)
+		return m, cmd
 
-	case threadlist.InboxZeroMsg:
-		// Emit InboxZeroMsg to the parent app model.
-		accountID := ""
-		if len(m.cfg.Accounts) > 0 {
-			accountID = m.cfg.Accounts[0].ID
-		}
-		cmd := func() tea.Msg {
-			return msgs.InboxZeroMsg{AccountID: accountID}
-		}
+	case msgs.ReloadInboxMsg:
+		cmd := m.loadThreadsForInbox(m.activeInboxID)
 		return m, cmd
 
 	case commandbar.CommandMsg:
@@ -116,12 +109,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case msgs.SyncDoneMsg:
 		m.advanceBackgroundSyncJob()
-		m.loadThreadsForInbox(m.activeInboxID)
+		cmd := m.loadThreadsForInbox(m.activeInboxID)
 		m.statusBar.SetSyncStatus("synced")
-		m.refreshUnreadCount()
 		m.refreshMetrics()
 		m.propagateSizes()
-		return m, nil
+		return m, cmd
 
 	case msgs.SyncErrorMsg:
 		m.advanceBackgroundSyncJob()
@@ -130,10 +122,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case msgs.NewMailMsg:
-		m.loadThreadsForInbox(m.activeInboxID)
+		cmd := m.loadThreadsForInbox(m.activeInboxID)
 		m.statusBar.SetSyncStatus(fmt.Sprintf("+%d new", msg.Count))
-		m.refreshUnreadCount()
-		return m, nil
+		return m, cmd
 	}
 
 	return m, tea.Batch(cmds...)
@@ -237,18 +228,28 @@ func (m *Model) propagateSizes() {
 	m.commandBar.SetWidth(m.width)
 }
 
-// loadThreadsForInbox fetches threads from the database and updates the thread list.
-func (m *Model) loadThreadsForInbox(inboxID string) {
+// loadThreadsForInbox fetches unread threads for the inbox and updates the thread list.
+// It returns a command that fires InboxZeroMsg when the user clears the last unread.
+func (m *Model) loadThreadsForInbox(inboxID string) tea.Cmd {
 	if m.database == nil {
-		return
+		return nil
 	}
 
 	m.searchResultsActive = false
+	m.lastSearchQuery = ""
 
-	dbThreads, err := m.database.GetThreads(inboxID, 100)
+	prevUnread := m.lastUnreadTotal
+
+	dbThreads, err := m.database.GetThreads(inboxID, 100, true)
 	if err != nil {
 		slog.Warn("failed to load threads", "inbox", inboxID, "err", err)
-		return
+		return nil
+	}
+
+	count, err := m.database.GetUnreadCount(inboxID)
+	if err != nil {
+		slog.Warn("failed to get unread count", "inbox", inboxID, "err", err)
+		count = 0
 	}
 
 	items := make([]threadlist.ThreadItem, 0, len(dbThreads))
@@ -265,26 +266,52 @@ func (m *Model) loadThreadsForInbox(inboxID string) {
 		})
 	}
 
+	var inboxZeroCmd tea.Cmd
+	if len(items) == 0 && count == 0 {
+		m.threadList.SetEmptyHint("No unread messages — you're all caught up.")
+		if prevUnread > 0 {
+			accountID := ""
+			if len(m.cfg.Accounts) > 0 {
+				accountID = m.cfg.Accounts[0].ID
+			}
+			inboxZeroCmd = func() tea.Msg {
+				return msgs.InboxZeroMsg{AccountID: accountID}
+			}
+		}
+	} else {
+		m.threadList.SetEmptyHint("")
+	}
+
 	m.threadList.SetThreads(items)
+	m.lastUnreadTotal = count
+	m.statusBar.SetUnread(count)
+
+	if len(items) > 0 {
+		m.loadMessageForThread(items[0].ID, false)
+	} else {
+		m.messageView.SetMessage("", "", "", "", "", "")
+	}
+
+	return inboxZeroCmd
 }
 
 // loadMessageForThread fetches the latest message in a thread and displays it.
-func (m *Model) loadMessageForThread(threadID string) {
+// When markRead is true, the thread is marked read and the thread list is refreshed.
+func (m *Model) loadMessageForThread(threadID string, markRead bool) tea.Cmd {
 	if m.database == nil {
-		return
+		return nil
 	}
 
 	dbMsgs, err := m.database.GetThreadMessages(threadID)
 	if err != nil {
 		slog.Warn("failed to load messages", "thread", threadID, "err", err)
-		return
+		return nil
 	}
 
 	if len(dbMsgs) == 0 {
-		return
+		return nil
 	}
 
-	// Display the most recent message in the thread.
 	latest := dbMsgs[len(dbMsgs)-1]
 	m.messageView.SetMessage(
 		latest.FromAddr,
@@ -295,10 +322,17 @@ func (m *Model) loadMessageForThread(threadID string) {
 		latest.BodyHTML,
 	)
 
-	// Mark thread as read.
+	if !markRead {
+		return nil
+	}
 	if err := m.database.MarkThreadRead(threadID); err != nil {
 		slog.Warn("failed to mark thread read", "thread", threadID, "err", err)
+		return nil
 	}
+	if m.searchResultsActive {
+		return m.searchThreads(m.lastSearchQuery)
+	}
+	return m.loadThreadsForInbox(m.activeInboxID)
 }
 
 // searchThreads performs FTS search and updates the thread list with results.
@@ -340,8 +374,15 @@ func (m *Model) searchThreads(query string) tea.Cmd {
 		})
 	}
 
+	m.lastSearchQuery = query
+	m.threadList.SetEmptyHint("")
 	m.threadList.SetThreads(items)
 	m.searchResultsActive = true
+	if len(items) > 0 {
+		m.loadMessageForThread(items[0].ID, false)
+	} else {
+		m.messageView.SetMessage("", "", "", "", "", "")
+	}
 	return nil
 }
 

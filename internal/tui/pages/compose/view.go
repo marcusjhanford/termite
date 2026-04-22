@@ -171,7 +171,7 @@ func (m Model) View() string {
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#666666")).
 		MarginTop(1)
-	rows = append(rows, helpStyle.Render("Tab next field | Enter newline (body) | Ctrl+A attach | ⌘/Ctrl+Enter send | Esc cancel"))
+	rows = append(rows, helpStyle.Render("Tab next field | Enter newline (body) | Ctrl+A attach | Ctrl+Enter or Ctrl+S send (⌘+Enter often blocked by Terminal) | Esc cancel"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
@@ -317,7 +317,7 @@ func (m Model) viewEmbedded() string {
 	}
 
 	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#555555"))
-	rows = append(rows, helpStyle.Render("Tab • Enter • ⌘/Ctrl+Enter send • Esc"))
+	rows = append(rows, helpStyle.Render("Tab • Enter • Ctrl+Enter / Ctrl+S send • Esc"))
 
 	content := lipgloss.JoinVertical(lipgloss.Left, rows...)
 

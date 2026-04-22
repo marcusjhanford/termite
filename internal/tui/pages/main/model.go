@@ -45,6 +45,10 @@ type Model struct {
 
 	// searchResultsActive is true after an FTS search until the user clears it (Esc) or reloads the inbox.
 	searchResultsActive bool
+	lastSearchQuery     string
+
+	// lastUnreadTotal tracks the inbox unread count after the last load (-1 = not yet loaded).
+	lastUnreadTotal int
 
 	inboxList   inboxlist.Model
 	threadList  threadlist.Model
@@ -53,10 +57,10 @@ type Model struct {
 	commandBar  commandbar.Model
 
 	// embedCompose: right column is split between message (top) and inline compose (bottom).
-	embedCompose       bool
-	messagePaneInnerH  int
-	composePaneInnerW  int
-	composePaneInnerH  int
+	embedCompose      bool
+	messagePaneInnerH int
+	composePaneInnerW int
+	composePaneInnerH int
 }
 
 // New creates a main page model wired to real components.
@@ -118,16 +122,17 @@ func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) M
 	}
 
 	return Model{
-		cfg:           cfg,
-		database:      database,
-		tracker:       tracker,
-		focus:         FocusThreadList,
-		activeInboxID: activeInbox,
-		inboxList:     il,
-		threadList:    tl,
-		messageView:   mv,
-		statusBar:     sb,
-		commandBar:    cb,
+		cfg:             cfg,
+		database:        database,
+		tracker:         tracker,
+		focus:           FocusThreadList,
+		activeInboxID:   activeInbox,
+		lastUnreadTotal: -1,
+		inboxList:       il,
+		threadList:      tl,
+		messageView:     mv,
+		statusBar:       sb,
+		commandBar:      cb,
 	}
 }
 

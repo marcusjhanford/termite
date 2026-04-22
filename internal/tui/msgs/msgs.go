@@ -29,9 +29,13 @@ type InboxZeroMsg struct {
 	AccountID string
 }
 
-// ThreadSelectedMsg is sent when the user selects a thread in the list.
-type ThreadSelectedMsg struct {
-	ThreadID string
+// ReloadInboxMsg triggers a thread list refresh on the main page (e.g. after archive).
+type ReloadInboxMsg struct{}
+
+// MailSendResultMsg reports the outcome of an asynchronous SMTP send from compose.
+type MailSendResultMsg struct {
+	Err       error
+	AccountID string
 }
 
 // MilestoneUnlockedMsg is sent when a new achievement milestone is unlocked.

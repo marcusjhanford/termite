@@ -246,14 +246,19 @@ func (db *DB) InsertThread(thread *Thread) error {
 }
 
 // GetThreads returns threads for a split inbox, ordered by last message time.
-func (db *DB) GetThreads(splitInboxID string, limit int) ([]Thread, error) {
+// When unreadOnly is true, only threads with unread_count > 0 are returned.
+func (db *DB) GetThreads(splitInboxID string, limit int, unreadOnly bool) ([]Thread, error) {
 	var threads []Thread
-	err := db.Select(&threads, `
+	q := `
 		SELECT * FROM threads
-		WHERE split_inbox_id = ? AND is_archived = 0 AND is_deleted = 0
+		WHERE split_inbox_id = ? AND is_archived = 0 AND is_deleted = 0`
+	if unreadOnly {
+		q += ` AND unread_count > 0`
+	}
+	q += `
 		ORDER BY last_message_at DESC
-		LIMIT ?
-	`, splitInboxID, limit)
+		LIMIT ?`
+	err := db.Select(&threads, q, splitInboxID, limit)
 	return threads, err
 }
 

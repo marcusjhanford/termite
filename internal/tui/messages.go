@@ -9,7 +9,6 @@ type (
 	SyncErrorMsg         = msgs.SyncErrorMsg
 	NewMailMsg           = msgs.NewMailMsg
 	InboxZeroMsg         = msgs.InboxZeroMsg
-	ThreadSelectedMsg    = msgs.ThreadSelectedMsg
 	MilestoneUnlockedMsg = msgs.MilestoneUnlockedMsg
 	ComposeMsg           = msgs.ComposeMsg
 	NavigateMsg          = msgs.NavigateMsg

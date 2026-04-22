@@ -1,18 +1,32 @@
 package composepage
 
 import (
+	"strings"
 	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/termite-mail/termite/internal/debuglog"
 )
 
 // isSendComposerKey is true for Ctrl+Enter (Windows/Linux), Cmd+Enter / Super+Enter (macOS), or Meta+Enter.
 func isSendComposerKey(k tea.Key, keyStr string) bool {
+	// #region agent log
+	ok := false
 	switch keyStr {
-	case "ctrl+enter", "super+enter", "meta+enter":
-		return true
+	case "ctrl+enter", "super+enter", "meta+enter", "ctrl+s":
+		// ctrl+s: reliable send shortcut on macOS where Cmd+Enter is often captured by the terminal.
+		ok = true
+	default:
+		ok = k.Code == tea.KeyEnter && (k.Mod&(tea.ModCtrl|tea.ModSuper|tea.ModMeta)) != 0
 	}
-	return k.Code == tea.KeyEnter && (k.Mod&(tea.ModCtrl|tea.ModSuper|tea.ModMeta)) != 0
+	if k.Code == tea.KeyEnter || k.Mod != 0 || strings.Contains(keyStr, "enter") {
+		debuglog.AgentLog("H2-H3", "compose/edit.go:isSendComposerKey", "send key evaluation", map[string]any{
+			"keyStr": keyStr, "code": int(k.Code), "mod": int(k.Mod), "match": ok,
+		})
+	}
+	// #endregion
+	return ok
 }
 
 // isModifierBackspace is Backspace combined with Ctrl, Alt, Super/Meta (Cmd on macOS), etc.

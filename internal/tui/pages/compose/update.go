@@ -5,6 +5,8 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/termite-mail/termite/internal/debuglog"
 )
 
 // Update implements tea.Model for the compose page.
@@ -41,6 +43,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 		keyStr := msg.String()
 		k := msg.Key()
+
+		// #region agent log
+		if strings.Contains(keyStr, "enter") || k.Mod != 0 {
+			debuglog.AgentLog("H1-H4", "compose/update.go:KeyPressMsg", "compose key (enter/mod)", map[string]any{
+				"keyStr": keyStr, "code": int(k.Code), "mod": int(k.Mod), "sendMatch": isSendComposerKey(k, keyStr),
+			})
+		}
+		// #endregion
 
 		// --- Normal compose mode ---
 

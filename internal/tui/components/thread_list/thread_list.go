@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 
+	"github.com/termite-mail/termite/internal/debuglog"
 	"github.com/termite-mail/termite/internal/tui/linefmt"
 )
 
@@ -34,21 +35,22 @@ type ThreadItem struct {
 }
 
 // ThreadSelectedMsg is emitted when the user selects a thread.
+// MarkRead is true when the user confirms with Enter (mark read + refresh inbox);
+// false for j/k navigation (preview only).
 type ThreadSelectedMsg struct {
 	ThreadID string
+	MarkRead bool
 }
-
-// InboxZeroMsg is emitted when all visible threads have unread=0.
-type InboxZeroMsg struct{}
 
 // Model is the middle-pane thread list component.
 type Model struct {
-	threads  []ThreadItem
-	selected int
-	focused  bool
-	width    int
-	height   int
-	offset   int // scroll offset
+	threads   []ThreadItem
+	selected  int
+	focused   bool
+	width     int
+	height    int
+	offset    int    // scroll offset
+	emptyHint string // shown when threads is empty (e.g. inbox has no unreads)
 }
 
 // New creates an empty thread list model.
@@ -74,17 +76,22 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if len(m.threads) > 0 && m.selected < len(m.threads)-1 {
 				m.selected++
 				m.ensureVisible()
-				return m, m.emitSelected()
+				return m, m.emitSelected(false)
 			}
 		case "k", "up":
 			if m.selected > 0 {
 				m.selected--
 				m.ensureVisible()
-				return m, m.emitSelected()
+				return m, m.emitSelected(false)
 			}
 		case "enter":
 			if len(m.threads) > 0 {
-				return m, m.emitSelected()
+				// #region agent log
+				debuglog.AgentLog("H5", "thread_list:enter", "thread list Enter → preview only (MarkRead false)", map[string]any{
+					"threadID": m.threads[m.selected].ID, "markRead": false,
+				})
+				// #endregion
+				return m, m.emitSelected(false)
 			}
 		}
 	}
@@ -242,9 +249,15 @@ func (m Model) buildThreadCard(i int) string {
 		return card.Render(inner)
 	}
 
+	rowStyle := normalStyle
+	snipStyle := snippetStyle
+	if thread.UnreadCount > 0 {
+		rowStyle = rowStyle.Bold(true).Foreground(lipgloss.Color("#D8D8EA"))
+		snipStyle = snipStyle.Foreground(lipgloss.Color("#6B6B7E"))
+	}
 	inner := lipgloss.JoinVertical(lipgloss.Left,
-		m.clipOneLine(normalStyle.Render(line1)),
-		m.clipOneLine(snippetStyle.Render(snippetLine)),
+		m.clipOneLine(rowStyle.Render(line1)),
+		m.clipOneLine(snipStyle.Render(snippetLine)),
 	)
 	return lipgloss.NewStyle().
 		Width(m.width).
@@ -281,11 +294,16 @@ func (m Model) View() string {
 		Render(content)
 }
 
-// SetThreads replaces the current thread list and checks for inbox zero.
+// SetThreads replaces the current thread list.
 func (m *Model) SetThreads(threads []ThreadItem) {
 	m.threads = threads
 	m.selected = 0
 	m.offset = 0
+}
+
+// SetEmptyHint sets the copy shown when there are no threads (empty string restores default).
+func (m *Model) SetEmptyHint(hint string) {
+	m.emptyHint = hint
 }
 
 // SetFocused sets whether this component is focused.
@@ -308,39 +326,27 @@ func (m Model) SelectedThread() *ThreadItem {
 	return &t
 }
 
-// checkInboxZero returns a command that fires InboxZeroMsg when all
-// threads have zero unread messages.
-func (m Model) checkInboxZero() tea.Cmd {
-	if len(m.threads) == 0 {
-		return nil
-	}
-	for _, t := range m.threads {
-		if t.UnreadCount > 0 {
-			return nil
-		}
-	}
-	return func() tea.Msg {
-		return InboxZeroMsg{}
-	}
-}
-
 func (m Model) emptyView() string {
+	text := "No threads"
+	if m.emptyHint != "" {
+		text = m.emptyHint
+	}
 	placeholder := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#555555")).
-		Render("No threads")
+		Foreground(lipgloss.Color("#888888")).
+		Render(text)
 	return lipgloss.NewStyle().
 		Width(m.width).
 		Height(m.height).
 		Render(placeholder)
 }
 
-func (m Model) emitSelected() tea.Cmd {
+func (m Model) emitSelected(markRead bool) tea.Cmd {
 	if len(m.threads) == 0 {
 		return nil
 	}
 	id := m.threads[m.selected].ID
 	return func() tea.Msg {
-		return ThreadSelectedMsg{ThreadID: id}
+		return ThreadSelectedMsg{ThreadID: id, MarkRead: markRead}
 	}
 }
 
