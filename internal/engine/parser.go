@@ -347,19 +347,70 @@ func parseMultipart(body, boundary string) (string, string, bool) {
 	return textBody, htmlBody, hasAttachment
 }
 
+// unfoldMIMEHeaderBlock joins RFC 5322 folded header lines (continuation lines start with
+// space or tab) so each header field is a single logical line. Required to find
+// Content-Transfer-Encoding when it is split across lines.
+func unfoldMIMEHeaderBlock(block string) string {
+	block = strings.ReplaceAll(block, "\r\n", "\n")
+	if block == "" {
+		return block
+	}
+	var cur strings.Builder
+	var lines []string
+	for _, line := range strings.Split(block, "\n") {
+		isCont := len(line) > 0 && (line[0] == ' ' || line[0] == '\t')
+		if isCont && cur.Len() > 0 {
+			cur.WriteString(" ")
+			cur.WriteString(strings.TrimSpace(line))
+			continue
+		}
+		if cur.Len() > 0 {
+			lines = append(lines, cur.String())
+			cur.Reset()
+		}
+		cur.WriteString(line)
+	}
+	if cur.Len() > 0 {
+		lines = append(lines, cur.String())
+	}
+	return strings.Join(lines, "\n")
+}
+
+// contentTransferEncoding returns the lowercase Content-Transfer-Encoding token
+// (e.g. "quoted-printable", "base64") or "" if absent.
+func contentTransferEncoding(unfoldedHeaders string) string {
+	for _, line := range strings.Split(unfoldedHeaders, "\n") {
+		idx := strings.Index(line, ":")
+		if idx <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(strings.ToLower(line[:idx]))
+		if name != "content-transfer-encoding" {
+			continue
+		}
+		val := strings.TrimSpace(line[idx+1:])
+		if semi := strings.Index(val, ";"); semi >= 0 {
+			val = strings.TrimSpace(val[:semi])
+		}
+		val = strings.Trim(val, `"'`)
+		return strings.ToLower(val)
+	}
+	return ""
+}
+
 // decodeMIMEBody applies Content-Transfer-Encoding (quoted-printable, base64) when present.
 func decodeMIMEBody(headersBlock string, body string) string {
-	h := strings.ToLower(headersBlock)
-	if strings.Contains(h, "content-transfer-encoding: quoted-printable") ||
-		strings.Contains(h, "content-transfer-encoding:quoted-printable") {
+	unfolded := unfoldMIMEHeaderBlock(headersBlock)
+	cte := contentTransferEncoding(unfolded)
+	switch cte {
+	case "quoted-printable":
+		body = strings.ReplaceAll(body, "\r\n", "\n")
 		r := quotedprintable.NewReader(strings.NewReader(body))
 		out, err := io.ReadAll(r)
 		if err == nil {
 			return string(out)
 		}
-	}
-	if strings.Contains(h, "content-transfer-encoding: base64") ||
-		strings.Contains(h, "content-transfer-encoding:base64") {
+	case "base64":
 		s := strings.NewReplacer("\r\n", "", "\n", "", "\r", "").Replace(body)
 		s = strings.ReplaceAll(s, " ", "")
 		if raw, err := base64.StdEncoding.DecodeString(s); err == nil {
