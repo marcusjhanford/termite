@@ -245,20 +245,31 @@ func (db *DB) InsertThread(thread *Thread) error {
 	return err
 }
 
-// GetThreads returns threads for a split inbox, ordered by last message time.
+// GetThreads returns threads for a split inbox and account, ordered by last message time.
 // When unreadOnly is true, only threads with unread_count > 0 are returned.
-func (db *DB) GetThreads(splitInboxID string, limit int, unreadOnly bool) ([]Thread, error) {
+// When accountID is empty, threads from all accounts are returned.
+func (db *DB) GetThreads(splitInboxID string, accountID string, limit int, unreadOnly bool) ([]Thread, error) {
 	var threads []Thread
+	var args []interface{}
 	q := `
 		SELECT * FROM threads
 		WHERE split_inbox_id = ? AND is_archived = 0 AND is_deleted = 0`
+	args = append(args, splitInboxID)
+
+	if accountID != "" {
+		q += ` AND account_id = ?`
+		args = append(args, accountID)
+	}
+
 	if unreadOnly {
 		q += ` AND unread_count > 0`
 	}
 	q += `
 		ORDER BY last_message_at DESC
 		LIMIT ?`
-	err := db.Select(&threads, q, splitInboxID, limit)
+	args = append(args, limit)
+
+	err := db.Select(&threads, q, args...)
 	return threads, err
 }
 
@@ -341,12 +352,19 @@ func (db *DB) MarkThreadRead(threadID string) error {
 }
 
 // GetUnreadCount returns the total unread count for a split inbox.
-func (db *DB) GetUnreadCount(splitInboxID string) (int, error) {
+// When accountID is empty, counts across all accounts.
+func (db *DB) GetUnreadCount(splitInboxID string, accountID string) (int, error) {
 	var count int
-	err := db.Get(&count, `
+	var args []interface{}
+	q := `
 		SELECT COALESCE(SUM(unread_count), 0) FROM threads
-		WHERE split_inbox_id = ? AND is_archived = 0 AND is_deleted = 0
-	`, splitInboxID)
+		WHERE split_inbox_id = ? AND is_archived = 0 AND is_deleted = 0`
+	args = append(args, splitInboxID)
+	if accountID != "" {
+		q += ` AND account_id = ?`
+		args = append(args, accountID)
+	}
+	err := db.Get(&count, q, args...)
 	return count, err
 }
 
@@ -419,6 +437,7 @@ type SplitInbox struct {
 	ID         string `db:"id"`
 	Label      string `db:"label"`
 	SortOrder  int    `db:"sort_order"`
+	AccountID  string `db:"account_id"`
 	CreatedAt  int64  `db:"created_at"`
 	UnreadCount int   // computed, not stored
 }
@@ -435,12 +454,12 @@ type SenderRoute struct {
 // --- Split Inbox Management ---
 
 // CreateSplitInbox inserts a new split inbox into the database.
-func (db *DB) CreateSplitInbox(id, label string, sortOrder int) error {
+func (db *DB) CreateSplitInbox(id, label string, sortOrder int, accountID string) error {
 	_, err := db.Exec(`
-		INSERT INTO split_inboxes (id, label, sort_order, created_at)
-		VALUES (?, ?, ?, strftime('%s','now'))
-		ON CONFLICT(id) DO UPDATE SET label=excluded.label, sort_order=excluded.sort_order
-	`, id, label, sortOrder)
+		INSERT INTO split_inboxes (id, label, sort_order, account_id, created_at)
+		VALUES (?, ?, ?, ?, strftime('%s','now'))
+		ON CONFLICT(id) DO UPDATE SET label=excluded.label, sort_order=excluded.sort_order, account_id=excluded.account_id
+	`, id, label, sortOrder, accountID)
 	return err
 }
 
@@ -470,25 +489,44 @@ func (db *DB) DeleteSplitInbox(id string) error {
 	return tx.Commit()
 }
 
-// ListSplitInboxes returns all split inboxes ordered by sort_order.
-func (db *DB) ListSplitInboxes() ([]SplitInbox, error) {
+// ListSplitInboxes returns split inboxes for a given account, or all inboxes
+// if accountID is empty. Results are ordered by sort_order.
+func (db *DB) ListSplitInboxes(accountID string) ([]SplitInbox, error) {
 	var inboxes []SplitInbox
-	err := db.Select(&inboxes, `
-		SELECT id, label, sort_order, created_at
-		FROM split_inboxes
-		ORDER BY sort_order ASC, created_at ASC
-	`)
+	var err error
+	if accountID == "" {
+		err = db.Select(&inboxes, `
+			SELECT id, label, sort_order, account_id, created_at
+			FROM split_inboxes
+			ORDER BY sort_order ASC, created_at ASC
+		`)
+	} else {
+		err = db.Select(&inboxes, `
+			SELECT id, label, sort_order, account_id, created_at
+			FROM split_inboxes
+			WHERE account_id = ? OR account_id IS NULL OR account_id = ''
+			ORDER BY sort_order ASC, created_at ASC
+		`, accountID)
+	}
 	return inboxes, err
 }
 
 // GetUnreadCountByInbox returns a map of inbox ID -> unread count.
-func (db *DB) GetUnreadCountByInbox() (map[string]int, error) {
-	rows, err := db.Query(`
+// When accountID is empty, counts across all accounts.
+func (db *DB) GetUnreadCountByInbox(accountID string) (map[string]int, error) {
+	var q string
+	var args []interface{}
+	q = `
 		SELECT split_inbox_id, COALESCE(SUM(unread_count), 0)
 		FROM threads
-		WHERE is_archived = 0 AND is_deleted = 0
-		GROUP BY split_inbox_id
-	`)
+		WHERE is_archived = 0 AND is_deleted = 0`
+	if accountID != "" {
+		q += ` AND account_id = ?`
+		args = append(args, accountID)
+	}
+	q += ` GROUP BY split_inbox_id`
+
+	rows, err := db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -603,5 +641,29 @@ func (db *DB) ApplyRouteRetroactively(pattern, matchType, inboxID string) error 
 	}
 	_, err := db.Exec(query, inboxID, arg)
 	return err
+}
+
+// SeedAccountInboxes creates the default Primary and Spam split inboxes for
+// a given account if they don't already exist.
+func (db *DB) SeedAccountInboxes(accountID string) error {
+	_, err := db.Exec(`
+		INSERT OR IGNORE INTO split_inboxes (id, label, sort_order, account_id, created_at)
+		VALUES ('primary', 'Primary', 0, ?, strftime('%s','now'))
+	`, accountID)
+	if err != nil {
+		return err
+	}
+	_, err = db.Exec(`
+		INSERT OR IGNORE INTO split_inboxes (id, label, sort_order, account_id, created_at)
+		VALUES ('spam', 'Spam', 99, ?, strftime('%s','now'))
+	`, accountID)
+	return err
+}
+
+// GetThreadAccountID returns the account_id for the given thread.
+func (db *DB) GetThreadAccountID(threadID string) (string, error) {
+	var id string
+	err := db.Get(&id, "SELECT account_id FROM threads WHERE id = ?", threadID)
+	return id, err
 }
 

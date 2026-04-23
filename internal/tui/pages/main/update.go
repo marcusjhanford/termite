@@ -89,6 +89,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 
 	case msgs.ReloadInboxMsg:
+		m.statusBar.SetSyncStatus("")
 		cmd := m.loadThreadsForInbox(m.activeInboxID)
 		return m, cmd
 
@@ -132,7 +133,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case msgs.NewMailMsg:
 		cmd := m.loadThreadsForInbox(m.activeInboxID)
-		m.statusBar.SetSyncStatus(fmt.Sprintf("+%d new", msg.Count))
+		acctName := msg.AccountID
+		for _, acct := range m.cfg.Accounts {
+			if acct.ID == msg.AccountID {
+				acctName = acct.Name
+				break
+			}
+		}
+		m.statusBar.SetSyncStatus(fmt.Sprintf("+%d new (%s)", msg.Count, acctName))
 		return m, cmd
 
 	case msgs.InboxesChangedMsg:
@@ -254,13 +262,13 @@ func (m *Model) loadThreadsForInbox(inboxID string) tea.Cmd {
 
 	prevUnread := m.lastUnreadTotal
 
-	dbThreads, err := m.database.GetThreads(inboxID, 100, true)
+	dbThreads, err := m.database.GetThreads(inboxID, m.activeAccountID, 100, true)
 	if err != nil {
 		slog.Warn("failed to load threads", "inbox", inboxID, "err", err)
 		return nil
 	}
 
-	count, err := m.database.GetUnreadCount(inboxID)
+	count, err := m.database.GetUnreadCount(inboxID, m.activeAccountID)
 	if err != nil {
 		slog.Warn("failed to get unread count", "inbox", inboxID, "err", err)
 		count = 0
@@ -284,8 +292,8 @@ func (m *Model) loadThreadsForInbox(inboxID string) tea.Cmd {
 	if len(items) == 0 && count == 0 {
 		m.threadList.SetEmptyHint("No unread messages — you're all caught up.")
 		if prevUnread > 0 {
-			accountID := ""
-			if len(m.cfg.Accounts) > 0 {
+			accountID := m.activeAccountID
+			if accountID == "" && len(m.cfg.Accounts) > 0 {
 				accountID = m.cfg.Accounts[0].ID
 			}
 			inboxZeroCmd = func() tea.Msg {
@@ -405,7 +413,7 @@ func (m *Model) refreshUnreadCount() {
 	if m.database == nil {
 		return
 	}
-	count, err := m.database.GetUnreadCount(m.activeInboxID)
+	count, err := m.database.GetUnreadCount(m.activeInboxID, m.activeAccountID)
 	if err != nil {
 		slog.Warn("failed to get unread count", "err", err)
 		return

@@ -7,7 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// Command represents a slash-command that can be executed from the command bar.
+// Command represents a command that can be executed from the command bar.
 type Command struct {
 	Name        string
 	Description string
@@ -41,8 +41,8 @@ func (r *Registry) Dispatch(input string) tea.Cmd {
 		return nil
 	}
 
-	// Strip leading slash if present.
-	if strings.HasPrefix(input, "/") {
+	// Strip leading colon or slash if present.
+	if strings.HasPrefix(input, ":") || strings.HasPrefix(input, "/") {
 		input = input[1:]
 	}
 
@@ -53,7 +53,7 @@ func (r *Registry) Dispatch(input string) tea.Cmd {
 	cmd, ok := r.commands[name]
 	if !ok {
 		return func() tea.Msg {
-			return CommandErrorMsg{Command: name, Err: "unknown command: /" + name}
+			return CommandErrorMsg{Command: name, Err: "unknown command: :" + name}
 		}
 	}
 
@@ -63,6 +63,7 @@ func (r *Registry) Dispatch(input string) tea.Cmd {
 // Completions returns all commands whose names start with the given prefix,
 // sorted alphabetically. An empty prefix returns all commands.
 func (r *Registry) Completions(prefix string) []Command {
+	prefix = strings.TrimPrefix(prefix, ":")
 	prefix = strings.TrimPrefix(prefix, "/")
 	prefix = strings.ToLower(prefix)
 

@@ -35,7 +35,13 @@ func (m Model) View() string {
 	titleText := titleStyle.Render(" termite ")
 	titleSep := titleDimStyle.Render("│")
 	var titleAccount string
-	if len(m.cfg.Accounts) > 0 {
+	for _, acct := range m.cfg.Accounts {
+		if acct.ID == m.activeAccountID {
+			titleAccount = titleDimStyle.Render(" " + acct.Email + " ")
+			break
+		}
+	}
+	if titleAccount == "" && len(m.cfg.Accounts) > 0 {
 		titleAccount = titleDimStyle.Render(" " + m.cfg.Accounts[0].Email + " ")
 	}
 	titleLeft := titleText + titleSep + titleAccount
@@ -135,7 +141,13 @@ func (m Model) ViewEmbeddedCompose(composeView string) string {
 	titleText := titleStyle.Render(" termite ")
 	titleSep := titleDimStyle.Render("│")
 	var titleAccount string
-	if len(m.cfg.Accounts) > 0 {
+	for _, acct := range m.cfg.Accounts {
+		if acct.ID == m.activeAccountID {
+			titleAccount = titleDimStyle.Render(" " + acct.Email + " ")
+			break
+		}
+	}
+	if titleAccount == "" && len(m.cfg.Accounts) > 0 {
 		titleAccount = titleDimStyle.Render(" " + m.cfg.Accounts[0].Email + " ")
 	}
 	titleLeft := titleText + titleSep + titleAccount

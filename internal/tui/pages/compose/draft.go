@@ -10,8 +10,12 @@ import (
 // FromThreadDraft builds a compose model with recipients and subject from the latest
 // message in a thread. The body is left empty so the user types above the visible message.
 // latest may be nil (caller keeps defaults).
-func FromThreadDraft(mode, threadID string, latest *db.Message, accountEmails []string) Model {
+// defaultAccountID pre-selects the account to send from.
+func FromThreadDraft(mode, threadID string, latest *db.Message, accountEmails []string, defaultAccountID string) Model {
 	m := NewWithMode(mode, threadID)
+
+	m.SetAccountEmails(accountEmails, defaultAccountID)
+
 	if latest == nil {
 		return m
 	}

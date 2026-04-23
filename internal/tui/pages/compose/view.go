@@ -71,6 +71,26 @@ func (m Model) View() string {
 	title := modeTitle(m.mode)
 	header := titleStyle.Render(title)
 
+	var rows []string
+	rows = append(rows, header)
+
+	// From field (dropdown).
+	{
+		isActive := m.activeField == fieldFrom && !m.pickingFile
+		lbl := labelStyle
+		inp := inputStyle
+		if isActive {
+			lbl = activeLabelStyle
+			inp = activeInputStyle
+		}
+		label := lbl.Render("From:")
+		fromVal := m.FromEmail()
+		if isActive {
+			fromVal += " ▼" + cursor
+		}
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, label, inp.Render(fromVal)))
+	}
+
 	// Single-line fields.
 	fields := []struct {
 		label string
@@ -82,9 +102,6 @@ func (m Model) View() string {
 		{"Bcc:", m.bcc, fieldBcc},
 		{"Subject:", m.subject, fieldSubject},
 	}
-
-	var rows []string
-	rows = append(rows, header)
 
 	for _, f := range fields {
 		isActive := m.activeField == f.idx && !m.pickingFile
@@ -237,6 +254,26 @@ func (m Model) viewEmbedded() string {
 
 	title := titleStyle.Render(modeTitle(m.mode))
 
+	var rows []string
+	rows = append(rows, title)
+
+	// From field (dropdown).
+	{
+		isActive := m.activeField == fieldFrom
+		lbl := labelStyle
+		inp := inputStyle
+		if isActive {
+			lbl = activeLabelStyle
+			inp = activeInputStyle
+		}
+		label := lbl.Render("From:")
+		fromVal := m.FromEmail()
+		if isActive {
+			fromVal += " ▼" + cursor
+		}
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, label, inp.Render(fromVal)))
+	}
+
 	fields := []struct {
 		label string
 		value string
@@ -247,9 +284,6 @@ func (m Model) viewEmbedded() string {
 		{"Bcc:", m.bcc, fieldBcc},
 		{"Subject:", m.subject, fieldSubject},
 	}
-
-	var rows []string
-	rows = append(rows, title)
 
 	for _, f := range fields {
 		isActive := m.activeField == f.idx
@@ -395,6 +429,8 @@ func modeTitle(mode string) string {
 // fieldName returns a display name for the given field index (for debugging).
 func fieldName(idx int) string {
 	switch idx {
+	case fieldFrom:
+		return "From"
 	case fieldTo:
 		return "To"
 	case fieldCc:

@@ -9,7 +9,8 @@ import (
 
 // Field index constants for Tab navigation.
 const (
-	fieldTo = iota
+	fieldFrom = iota
+	fieldTo
 	fieldCc
 	fieldBcc
 	fieldSubject
@@ -31,6 +32,11 @@ type Model struct {
 	bcc     string
 	subject string
 	body    string
+
+	// Account selection (From dropdown).
+	accountEmails    []string // all configured account emails
+	fromAccountIndex int      // selected account index
+	accountID        string   // selected account ID
 
 	// Attachments.
 	attachments []string // file paths
@@ -60,6 +66,7 @@ type SendMsg struct {
 	Subject     string
 	Body        string
 	Attachments []string
+	AccountID   string // which account to send from
 }
 
 // New creates a blank compose model.
@@ -92,6 +99,42 @@ func NewWithMode(mode, threadID string) Model {
 func (m *Model) SetKnownEmails(emails []string) {
 	m.knownEmails = make([]string, len(emails))
 	copy(m.knownEmails, emails)
+}
+
+// SetAccountEmails sets the list of available account emails for the From
+// dropdown and selects the first one by default.
+func (m *Model) SetAccountEmails(emails []string, accountID string) {
+	m.accountEmails = make([]string, len(emails))
+	copy(m.accountEmails, emails)
+	m.accountID = accountID
+	m.fromAccountIndex = 0
+	for i, e := range emails {
+		if e == accountID {
+			m.fromAccountIndex = i
+			break
+		}
+	}
+}
+
+// CycleFromAccount moves to the next account in the From dropdown.
+func (m *Model) CycleFromAccount() {
+	if len(m.accountEmails) == 0 {
+		return
+	}
+	m.fromAccountIndex = (m.fromAccountIndex + 1) % len(m.accountEmails)
+}
+
+// FromEmail returns the currently selected sender email.
+func (m Model) FromEmail() string {
+	if len(m.accountEmails) == 0 {
+		return ""
+	}
+	return m.accountEmails[m.fromAccountIndex]
+}
+
+// AccountID returns the currently selected account ID (same as the email for now).
+func (m Model) AccountID() string {
+	return m.FromEmail()
 }
 
 // Init implements tea.Model.

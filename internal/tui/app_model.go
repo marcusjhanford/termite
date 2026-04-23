@@ -86,6 +86,13 @@ type appModel struct {
 
 	// Route scope picker (after confirming they want to route).
 	showRouteScope bool
+
+	// Active account ID for multi-account isolation.
+	activeAccountID string
+
+	// Account picker overlay state.
+	showAccountPicker bool
+	accountCursor     int
 }
 
 // NewAppModel creates the root application model.
@@ -95,6 +102,7 @@ func NewAppModel(
 	themeManager *themes.ThemeManager,
 	tracker *metrics.MetricsTracker,
 	dmn *daemon.Daemon,
+	activeAccountID string,
 ) appModel {
 	km := BuildKeyMap(cfg)
 
@@ -112,8 +120,9 @@ func NewAppModel(
 	reg.Register(commands.ShortcutsCommand())
 	reg.Register(commands.MetricsCommand())
 	reg.Register(commands.DaemonCommand())
+	reg.Register(commands.AccountCommand())
 
-	mp := mainpage.New(cfg, database, tracker)
+	mp := mainpage.New(cfg, database, tracker, activeAccountID)
 	if len(cfg.Accounts) > 0 && database != nil {
 		mp = mp.WithBackgroundSyncExpected(len(cfg.Accounts))
 	}
@@ -127,20 +136,21 @@ func NewAppModel(
 	mp.SetCommandNames(cmdNames)
 
 	return appModel{
-		cfg:            cfg,
-		db:             database,
-		themes:         themeManager,
-		metrics:        tracker,
-		keymap:         km,
-		activePage:     startPage,
-		mainPage:       mp,
-		composePage:    composepage.New(),
-		setupPage:      setuppage.New(cfg),
-		inboxZeroPage:  inboxzeropage.New(themeManager.Current()),
-		metricsPage:    metricsdashboard.New(),
-		cmdRegistry:    reg,
-		milestoneToast: milestonetoast.New(),
-		daemon:         dmn,
+		cfg:             cfg,
+		db:              database,
+		themes:          themeManager,
+		metrics:         tracker,
+		keymap:          km,
+		activePage:      startPage,
+		mainPage:        mp,
+		composePage:     composepage.New(),
+		setupPage:       setuppage.New(cfg),
+		inboxZeroPage:   inboxzeropage.New(themeManager.Current()),
+		metricsPage:     metricsdashboard.New(),
+		cmdRegistry:     reg,
+		milestoneToast:  milestonetoast.New(),
+		daemon:          dmn,
+		activeAccountID: activeAccountID,
 	}
 }
 
@@ -493,12 +503,73 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = "Exporting metrics as " + msg.Format + "..."
 		return m, nil
 
+	case commands.SwitchAccountMsg:
+		if len(m.cfg.Accounts) <= 1 {
+			m.statusMsg = "Only one account configured — nothing to switch"
+			m.mainPage.SetStatusText(m.statusMsg)
+			return m, nil
+		}
+		for _, acct := range m.cfg.Accounts {
+			if acct.ID == msg.AccountID {
+				m.activeAccountID = msg.AccountID
+				m.statusMsg = "Switched to " + acct.Email
+				m.mainPage.SetStatusText(m.statusMsg)
+				// Rebuild main page with new account context.
+				m.mainPage = mainpage.New(m.cfg, m.db, m.metrics, m.activeAccountID)
+				allCmds := m.cmdRegistry.All()
+				cmdNames := make([]string, len(allCmds))
+				for i, c := range allCmds {
+					cmdNames[i] = c.Name
+				}
+				m.mainPage.SetCommandNames(cmdNames)
+				m.sendSizeToActivePage()
+				return m, m.refreshInboxesCmd()
+			}
+		}
+		m.statusMsg = "Unknown account: " + msg.AccountID
+		m.mainPage.SetStatusText(m.statusMsg)
+		return m, nil
+
+	case commands.ListAccountsMsg:
+		if len(m.cfg.Accounts) == 0 {
+			m.statusMsg = "No accounts configured"
+			m.mainPage.SetStatusText(m.statusMsg)
+			return m, nil
+		}
+		var parts []string
+		for _, acct := range m.cfg.Accounts {
+			marker := " "
+			if acct.ID == m.activeAccountID {
+				marker = "▸"
+			}
+			parts = append(parts, fmt.Sprintf("%s %s (%s)", marker, acct.Email, acct.ID))
+		}
+		m.statusMsg = "Accounts: " + strings.Join(parts, ", ")
+		m.mainPage.SetStatusText(m.statusMsg)
+		return m, nil
+
+	case commands.OpenAccountPickerMsg:
+		if len(m.cfg.Accounts) == 0 {
+			m.statusMsg = "No accounts configured"
+			m.mainPage.SetStatusText(m.statusMsg)
+			return m, nil
+		}
+		m.showAccountPicker = true
+		m.accountCursor = 0
+		for i, acct := range m.cfg.Accounts {
+			if acct.ID == m.activeAccountID {
+				m.accountCursor = i
+				break
+			}
+		}
+		return m, nil
+
 	case commands.CreateInboxMsg:
 		if m.db == nil {
 			m.statusMsg = "No database available"
 			return m, nil
 		}
-		if err := m.db.CreateSplitInbox(msg.ID, msg.Label, 0); err != nil {
+		if err := m.db.CreateSplitInbox(msg.ID, msg.Label, 0, m.activeAccountID); err != nil {
 			m.statusMsg = "Failed to create inbox: " + err.Error()
 			return m, nil
 		}
@@ -526,7 +597,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "No database available"
 			return m, nil
 		}
-		inboxes, err := m.db.ListSplitInboxes()
+		inboxes, err := m.db.ListSplitInboxes(m.activeAccountID)
 		if err != nil {
 			m.statusMsg = "Failed to list inboxes: " + err.Error()
 			return m, nil
@@ -574,6 +645,31 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Dismiss help on any key if it's showing.
 		if m.showHelp {
 			m.showHelp = false
+			return m, nil
+		}
+
+		// Account picker overlay navigation.
+		if m.showAccountPicker {
+			switch keyStr {
+			case "j", "down":
+				if m.accountCursor < len(m.cfg.Accounts)-1 {
+					m.accountCursor++
+				}
+			case "k", "up":
+				if m.accountCursor > 0 {
+					m.accountCursor--
+				}
+			case "enter":
+				if m.accountCursor < len(m.cfg.Accounts) {
+					chosen := m.cfg.Accounts[m.accountCursor]
+					m.showAccountPicker = false
+					return m, func() tea.Msg {
+						return commands.SwitchAccountMsg{AccountID: chosen.ID}
+					}
+				}
+			case "esc", "q":
+				m.showAccountPicker = false
+			}
 			return m, nil
 		}
 
@@ -822,6 +918,11 @@ func (m appModel) View() tea.View {
 		s = m.mainPage.View()
 	}
 
+	// Overlay account picker if showing.
+	if m.showAccountPicker {
+		s = m.renderAccountPicker()
+	}
+
 	// Overlay move inbox picker if showing.
 	if m.showMoveInboxPicker {
 		s = m.renderMoveInboxPicker()
@@ -1063,7 +1164,16 @@ func (m *appModel) initCompose(mode, threadID string) {
 		emails = append(emails, m.cfg.Accounts[i].Email)
 	}
 
-	m.composePage = composepage.FromThreadDraft(mode, threadID, latest, emails)
+	// Determine default account for sending.
+	defaultAccountID := m.activeAccountID
+	if threadID != "" && m.db != nil {
+		// For reply/forward, default to the account that received the thread.
+		if acctID, err := m.db.GetThreadAccountID(threadID); err == nil && acctID != "" {
+			defaultAccountID = acctID
+		}
+	}
+
+	m.composePage = composepage.FromThreadDraft(mode, threadID, latest, emails, defaultAccountID)
 	m.composeSplit = needsThread
 
 	if m.composeSplit {
@@ -1112,14 +1222,28 @@ func (m *appModel) sendSizeToActivePage() {
 	}
 }
 
-// mailSendCmd sends the compose draft via SMTP using the first configured account.
+// mailSendCmd sends the compose draft via SMTP using the account selected
+// in the compose From dropdown.
 func (m *appModel) mailSendCmd(draft composepage.SendMsg) tea.Cmd {
 	if len(m.cfg.Accounts) == 0 {
 		return func() tea.Msg {
 			return msgs.StatusMsg{Text: "No account configured"}
 		}
 	}
-	acctCfg := m.cfg.Accounts[0]
+
+	var acctCfg config.AccountConfig
+	found := false
+	for _, acct := range m.cfg.Accounts {
+		if acct.Email == draft.AccountID || acct.ID == draft.AccountID {
+			acctCfg = acct
+			found = true
+			break
+		}
+	}
+	if !found {
+		acctCfg = m.cfg.Accounts[0]
+	}
+
 	acct, err := engine.NewAccount(acctCfg)
 	if err != nil {
 		return func() tea.Msg {
@@ -1331,12 +1455,12 @@ func (m *appModel) openMoveInboxPicker() tea.Cmd {
 		}
 	}
 
-	inboxes, err := m.db.ListSplitInboxes()
-	if err != nil || len(inboxes) == 0 {
-		return func() tea.Msg {
-			return msgs.StatusMsg{Text: "No inboxes available"}
+		inboxes, err := m.db.ListSplitInboxes(m.activeAccountID)
+		if err != nil || len(inboxes) == 0 {
+			return func() tea.Msg {
+				return msgs.StatusMsg{Text: "No inboxes available"}
+			}
 		}
-	}
 
 	m.moveInboxChoices = inboxes
 	m.moveInboxCursor = 0
@@ -1545,4 +1669,73 @@ func (m *appModel) markSpamSelected() tea.Cmd {
 		}
 	}
 	return m.handleSpamThread(msgs.SpamThreadMsg{ThreadID: threadID, ApplyPast: true})
+}
+
+// renderAccountPicker renders the interactive account selector overlay.
+func (m appModel) renderAccountPicker() string {
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7D56F4")).
+		MarginBottom(1)
+
+	activeStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#0d1117")).
+		Background(lipgloss.Color("#58a6ff")).
+		Padding(0, 1)
+
+	normalStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#e2e4e8")).
+		Padding(0, 1)
+
+	selectedStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#3fb950")).
+		Bold(true).
+		Padding(0, 1)
+
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#555555")).
+		Italic(true)
+
+	var lines []string
+	lines = append(lines, titleStyle.Render("Select Account"))
+
+	for i, acct := range m.cfg.Accounts {
+		label := acct.Email
+		if acct.Name != "" && acct.Name != acct.Email {
+			label = fmt.Sprintf("%s — %s", acct.Name, acct.Email)
+		}
+		if acct.ID == m.activeAccountID {
+			label = "▸ " + label
+		}
+
+		if i == m.accountCursor {
+			lines = append(lines, activeStyle.Render(label))
+		} else if acct.ID == m.activeAccountID {
+			lines = append(lines, selectedStyle.Render(label))
+		} else {
+			lines = append(lines, normalStyle.Render(label))
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("j/k navigate • Enter to select • Esc to cancel"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+
+	boxWidth := 50
+	if m.width > 0 && boxWidth > m.width-4 {
+		boxWidth = m.width - 4
+	}
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7D56F4")).
+		Width(boxWidth).
+		Padding(1, 2)
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		boxStyle.Render(content),
+	)
 }

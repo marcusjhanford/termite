@@ -89,7 +89,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 
 		// Enter: newline in body, advance field otherwise.
+		// When on From field, Enter cycles the account instead.
 		if keyStr == "enter" {
+			if m.activeField == fieldFrom {
+				m.CycleFromAccount()
+				return m, nil
+			}
 			if m.activeField == fieldBody {
 				m.body += "\n"
 			} else {
@@ -157,6 +162,7 @@ func (m Model) sendCmd() tea.Cmd {
 			Subject:     m.subject,
 			Body:        m.body,
 			Attachments: append([]string(nil), m.attachments...),
+			AccountID:   m.AccountID(),
 		}
 	}
 }

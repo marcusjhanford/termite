@@ -16,11 +16,12 @@ import (
 // App wires together all top-level application dependencies: configuration,
 // database, theme management, productivity metrics, and the background sync daemon.
 type App struct {
-	Config       *config.Config
-	DB           *db.DB
-	ThemeManager *themes.ThemeManager
-	Metrics      *metrics.MetricsTracker
-	Daemon       *daemon.Daemon
+	Config          *config.Config
+	DB              *db.DB
+	ThemeManager    *themes.ThemeManager
+	Metrics         *metrics.MetricsTracker
+	Daemon          *daemon.Daemon
+	ActiveAccountID string
 }
 
 // New creates a new App from the given configuration. It opens the database,
@@ -53,6 +54,16 @@ func New(cfg *config.Config) (*App, error) {
 		DB:           database,
 		ThemeManager: tm,
 		Metrics:      tracker,
+	}
+
+	// Seed default split inboxes for each configured account.
+	for _, acct := range cfg.Accounts {
+		_ = database.SeedAccountInboxes(acct.ID)
+	}
+
+	// Set active account to the first one by default.
+	if len(cfg.Accounts) > 0 {
+		app.ActiveAccountID = cfg.Accounts[0].ID
 	}
 
 	if cfg.General.AutoStartDaemon && len(cfg.Accounts) > 0 {
@@ -93,5 +104,5 @@ func (a *App) Close() error {
 // NewTUIModel creates and returns the root Bubble Tea model for the TUI,
 // fully wired with the App's dependencies.
 func (a *App) NewTUIModel() tea.Model {
-	return tui.NewAppModel(a.Config, a.DB, a.ThemeManager, a.Metrics, a.Daemon)
+	return tui.NewAppModel(a.Config, a.DB, a.ThemeManager, a.Metrics, a.Daemon, a.ActiveAccountID)
 }

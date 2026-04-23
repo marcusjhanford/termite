@@ -41,7 +41,8 @@ type Model struct {
 	bgSyncDone  int
 	syncPulse   int
 
-	activeInboxID string
+	activeInboxID   string
+	activeAccountID string // empty = show all accounts' threads
 
 	// searchResultsActive is true after an FTS search until the user clears it (Esc) or reloads the inbox.
 	searchResultsActive bool
@@ -64,10 +65,10 @@ type Model struct {
 }
 
 // New creates a main page model wired to real components.
-func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) Model {
+func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker, activeAccountID string) Model {
 	il := inboxlist.New(nil)
 	if database != nil {
-		il = refreshInboxList(il, database)
+		il = refreshInboxList(il, database, activeAccountID)
 	}
 
 	tl := threadlist.New()
@@ -82,7 +83,14 @@ func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) M
 	}
 
 	// Set initial status bar state.
-	if len(cfg.Accounts) > 0 {
+	if activeAccountID != "" {
+		for _, acct := range cfg.Accounts {
+			if acct.ID == activeAccountID {
+				sb.SetAccount(acct.Name)
+				break
+			}
+		}
+	} else if len(cfg.Accounts) > 0 {
 		sb.SetAccount(cfg.Accounts[0].Name)
 	}
 	sb.SetInbox(activeInbox)
@@ -93,7 +101,7 @@ func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) M
 
 	// Load initial unread count for status bar.
 	if database != nil {
-		unread, err := database.GetUnreadCount(activeInbox)
+		unread, err := database.GetUnreadCount(activeInbox, activeAccountID)
 		if err != nil {
 			slog.Warn("failed to load initial unread count", "err", err)
 		} else {
@@ -116,6 +124,7 @@ func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) M
 		tracker:         tracker,
 		focus:           FocusThreadList,
 		activeInboxID:   activeInbox,
+		activeAccountID: activeAccountID,
 		lastUnreadTotal: -1,
 		inboxList:       il,
 		threadList:      tl,
@@ -127,14 +136,14 @@ func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) M
 
 // refreshInboxList rebuilds the inbox list items from the database with
 // current unread counts. It preserves the current selection if possible.
-func refreshInboxList(il inboxlist.Model, database *db.DB) inboxlist.Model {
-	inboxes, err := database.ListSplitInboxes()
+func refreshInboxList(il inboxlist.Model, database *db.DB, accountID string) inboxlist.Model {
+	inboxes, err := database.ListSplitInboxes(accountID)
 	if err != nil {
 		slog.Warn("failed to load split inboxes", "err", err)
 		return il
 	}
 
-	counts, err := database.GetUnreadCountByInbox()
+	counts, err := database.GetUnreadCountByInbox(accountID)
 	if err != nil {
 		slog.Warn("failed to load unread counts", "err", err)
 		counts = make(map[string]int)
@@ -158,7 +167,7 @@ func (m *Model) RefreshInboxes() {
 	if m.database == nil {
 		return
 	}
-	m.inboxList = refreshInboxList(m.inboxList, m.database)
+	m.inboxList = refreshInboxList(m.inboxList, m.database, m.activeAccountID)
 	m.inboxList.SetActiveInbox(m.activeInboxID)
 }
 
@@ -225,6 +234,11 @@ func (m Model) ComposePaneInnerSize() (w, h int) {
 // for autocomplete.
 func (m *Model) SetCommandNames(names []string) {
 	m.commandBar.SetCommands(names)
+}
+
+// SetStatusText sets the status bar text (e.g. for command feedback).
+func (m *Model) SetStatusText(text string) {
+	m.statusBar.SetSyncStatus(text)
 }
 
 // Init implements tea.Model.
