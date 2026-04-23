@@ -13,6 +13,7 @@ import (
 	commandbar "github.com/termite-mail/termite/internal/tui/components/command_bar"
 	inboxlist "github.com/termite-mail/termite/internal/tui/components/inbox_list"
 	threadlist "github.com/termite-mail/termite/internal/tui/components/thread_list"
+	"github.com/termite-mail/termite/internal/tui/commands"
 	"github.com/termite-mail/termite/internal/tui/msgs"
 )
 
@@ -71,8 +72,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	case inboxlist.InboxSelectedMsg:
 		m.activeInboxID = msg.InboxID
+		m.inboxList.SetActiveInbox(msg.InboxID)
 		cmd := m.loadThreadsForInbox(msg.InboxID)
 		m.statusBar.SetInbox(msg.InboxID)
+		return m, cmd
+
+	case commands.SwitchInboxMsg:
+		m.activeInboxID = msg.InboxName
+		m.inboxList.SetActiveInbox(msg.InboxName)
+		cmd := m.loadThreadsForInbox(msg.InboxName)
+		m.statusBar.SetInbox(msg.InboxName)
 		return m, cmd
 
 	case threadlist.ThreadSelectedMsg:

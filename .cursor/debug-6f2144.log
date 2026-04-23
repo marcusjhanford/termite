@@ -7,3 +7,5 @@
 {"data":{"code":13,"keyStr":"ctrl+enter","match":true,"mod":4},"hypothesisId":"H2-H3","location":"compose/edit.go:isSendComposerKey","message":"send key evaluation","sessionId":"6f2144","timestamp":1776912887651}
 {"data":{"accountID":"mjh@csquared.nl"},"hypothesisId":"H4-fix","location":"app_model:MailSendResultMsg","message":"send completed","sessionId":"6f2144","timestamp":1776912889152}
 {"data":{"selectedID":"thread_72ee6a0dd42839039e3af033"},"hypothesisId":"H6","location":"app_model:key e","message":"archive key pressed","sessionId":"6f2144","timestamp":1776912894443}
+{"data":{"selectedID":"thread_5a899cc6a5e9259660ef252d"},"hypothesisId":"H6","location":"app_model:key e","message":"archive key pressed","sessionId":"6f2144","timestamp":1776963368320}
+{"data":{"markRead":false,"threadID":"thread_c1db5f093bfa05e3981f693e"},"hypothesisId":"H5","location":"thread_list:enter","message":"thread list Enter → preview only (MarkRead false)","sessionId":"6f2144","timestamp":1776963754953}

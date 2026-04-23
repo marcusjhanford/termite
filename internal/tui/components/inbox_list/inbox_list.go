@@ -21,11 +21,12 @@ type InboxSelectedMsg struct {
 
 // Model is the left-pane inbox list component.
 type Model struct {
-	inboxes  []InboxItem
-	selected int
-	focused  bool
-	width    int
-	height   int
+	inboxes       []InboxItem
+	selected      int
+	activeInboxID string // the inbox whose threads are currently displayed
+	focused       bool
+	width         int
+	height        int
 }
 
 // New creates an inbox list model with the given items.
@@ -93,27 +94,45 @@ func (m Model) View() string {
 		Foreground(lipgloss.Color("#FF6F61")).
 		Bold(true)
 
+	countZeroStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#666666"))
+
+	activeStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#FFFFFF")).
+		Bold(true)
+
 	var rows []string
 	rows = append(rows, titleStyle.Render("Inboxes"))
 
 	for i, inbox := range m.inboxes {
+		isActive := inbox.ID == m.activeInboxID
+		isSelected := i == m.selected
+
 		// Bullet: filled circle if unread, empty circle otherwise.
 		bullet := "○"
 		if inbox.UnreadCount > 0 {
 			bullet = "●"
 		}
 
-		label := fmt.Sprintf(" %s %s", bullet, inbox.Label)
-
-		// Count badge.
-		badge := ""
-		if inbox.UnreadCount > 0 {
-			badge = countStyle.Render(fmt.Sprintf(" (%d)", inbox.UnreadCount))
+		prefix := bullet
+		if isActive {
+			prefix = "▸"
 		}
 
+		label := fmt.Sprintf(" %s %s", prefix, inbox.Label)
+
+		// Count badge — always shown, bright when unread, dim when zero.
+		badgeStyle := countZeroStyle
+		if inbox.UnreadCount > 0 {
+			badgeStyle = countStyle
+		}
+		badge := badgeStyle.Render(fmt.Sprintf(" (%d)", inbox.UnreadCount))
+
 		style := normalStyle
-		if i == m.selected {
+		if isSelected {
 			style = selectedStyle
+		} else if isActive {
+			style = activeStyle
 		}
 
 		// Render the label with available width, then append badge.
@@ -140,6 +159,12 @@ func (m *Model) SetFocused(focused bool) {
 func (m *Model) SetSize(w, h int) {
 	m.width = w
 	m.height = h
+}
+
+// SetActiveInbox sets the inbox ID that is currently being viewed.
+// It is visually distinguished from the selected (cursor) inbox.
+func (m *Model) SetActiveInbox(id string) {
+	m.activeInboxID = id
 }
 
 // SelectedInbox returns the ID of the currently selected inbox.

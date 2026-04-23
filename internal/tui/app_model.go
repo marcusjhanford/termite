@@ -71,6 +71,21 @@ type appModel struct {
 
 	// daemon is the optional in-process background sync daemon.
 	daemon *daemon.Daemon
+
+	// Move inbox picker overlay state.
+	showMoveInboxPicker bool
+	moveInboxChoices    []db.SplitInbox
+	moveInboxCursor     int
+	moveInboxThreadID   string
+
+	// Route confirm overlay state (after picking an inbox with v).
+	showRouteConfirm   bool
+	routeConfirmInbox  string
+	routeConfirmDomain string
+	routeConfirmSender string // full email address
+
+	// Route scope picker (after confirming they want to route).
+	showRouteScope bool
 }
 
 // NewAppModel creates the root application model.
@@ -562,6 +577,87 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Route scope picker (after confirming they want to route).
+		if m.showRouteScope {
+			switch keyStr {
+			case "a", "A":
+				m.showRouteScope = false
+				return m, m.handleMoveThread(msgs.MoveThreadMsg{
+					ThreadID:    m.moveInboxThreadID,
+					TargetInbox: m.routeConfirmInbox,
+					CreateRoute: true,
+					MatchDomain: false, // exact address
+				})
+			case "d", "D":
+				m.showRouteScope = false
+				return m, m.handleMoveThread(msgs.MoveThreadMsg{
+					ThreadID:    m.moveInboxThreadID,
+					TargetInbox: m.routeConfirmInbox,
+					CreateRoute: true,
+					MatchDomain: true, // domain
+				})
+			case "esc", "q":
+				m.showRouteScope = false
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Route confirm overlay (after picking an inbox with v).
+		if m.showRouteConfirm {
+			switch keyStr {
+			case "y", "Y":
+				m.showRouteConfirm = false
+				m.showRouteScope = true
+				return m, nil
+			case "n", "N", "esc", "q":
+				m.showRouteConfirm = false
+				return m, m.handleMoveThread(msgs.MoveThreadMsg{
+					ThreadID:    m.moveInboxThreadID,
+					TargetInbox: m.routeConfirmInbox,
+					CreateRoute: false,
+				})
+			}
+			return m, nil
+		}
+
+		// Move inbox picker overlay navigation.
+		if m.showMoveInboxPicker {
+			switch keyStr {
+			case "j", "down":
+				if m.moveInboxCursor < len(m.moveInboxChoices)-1 {
+					m.moveInboxCursor++
+				}
+			case "k", "up":
+				if m.moveInboxCursor > 0 {
+					m.moveInboxCursor--
+				}
+			case "enter":
+				if m.moveInboxCursor < len(m.moveInboxChoices) {
+					chosen := m.moveInboxChoices[m.moveInboxCursor]
+					m.showMoveInboxPicker = false
+					// Transition to route confirm prompt.
+					email, domain := m.senderInfoForThread(m.moveInboxThreadID)
+					if domain != "" {
+						m.routeConfirmInbox = chosen.ID
+						m.routeConfirmDomain = domain
+						m.routeConfirmSender = email
+						m.showRouteConfirm = true
+						return m, nil
+					}
+					// No domain found (e.g. no from_addr) — just move.
+					return m, m.handleMoveThread(msgs.MoveThreadMsg{
+						ThreadID:    m.moveInboxThreadID,
+						TargetInbox: chosen.ID,
+						CreateRoute: false,
+					})
+				}
+			case "esc", "q":
+				m.showMoveInboxPicker = false
+			}
+			return m, nil
+		}
+
 		// Theme picker overlay navigation.
 		if m.showThemePicker {
 			switch keyStr {
@@ -662,7 +758,7 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "m":
 				return m, m.markSelectedRead()
 			case "v":
-				return m, m.moveToNextInbox()
+				return m, m.openMoveInboxPicker()
 			case "!":
 				return m, m.markSpamSelected()
 			}
@@ -724,6 +820,21 @@ func (m appModel) View() tea.View {
 		s = m.metricsPage.View()
 	default:
 		s = m.mainPage.View()
+	}
+
+	// Overlay move inbox picker if showing.
+	if m.showMoveInboxPicker {
+		s = m.renderMoveInboxPicker()
+	}
+
+	// Overlay route confirm if showing.
+	if m.showRouteConfirm {
+		s = m.renderRouteConfirm()
+	}
+
+	// Overlay route scope picker if showing.
+	if m.showRouteScope {
+		s = m.renderRouteScope()
 	}
 
 	// Overlay theme picker if showing.
@@ -796,7 +907,7 @@ func (m appModel) renderHelp() string {
 	lines = append(lines, row("e", "Archive thread"))
 	lines = append(lines, row("d", "Delete thread"))
 	lines = append(lines, row("m", "Mark as read"))
-	lines = append(lines, row("v", "Move to next inbox"))
+	lines = append(lines, row("v", "Move to inbox"))
 	lines = append(lines, row("!", "Mark as spam"))
 
 	lines = append(lines, sectionStyle.Render("Command & Search"))
@@ -1207,8 +1318,9 @@ func (m *appModel) handleSpamThread(msg msgs.SpamThreadMsg) tea.Cmd {
 	)
 }
 
-// moveToNextInbox moves the selected thread to the next inbox in the list.
-func (m *appModel) moveToNextInbox() tea.Cmd {
+// openMoveInboxPicker loads the list of split inboxes and opens the overlay
+// so the user can choose which inbox to move the selected thread to.
+func (m *appModel) openMoveInboxPicker() tea.Cmd {
 	if m.db == nil {
 		return nil
 	}
@@ -1219,35 +1331,205 @@ func (m *appModel) moveToNextInbox() tea.Cmd {
 		}
 	}
 
-	// Find the next inbox ID after the current one.
-	nextID := ""
-	inboxes, _ := m.db.ListSplitInboxes()
-	for i, inbox := range inboxes {
-		if inbox.ID == m.mainPage.ActiveInboxID() {
-			if i+1 < len(inboxes) {
-				nextID = inboxes[i+1].ID
-			} else {
-				nextID = inboxes[0].ID
-			}
-			break
-		}
-	}
-	if nextID == "" {
+	inboxes, err := m.db.ListSplitInboxes()
+	if err != nil || len(inboxes) == 0 {
 		return func() tea.Msg {
-			return msgs.StatusMsg{Text: "No other inbox available"}
+			return msgs.StatusMsg{Text: "No inboxes available"}
 		}
 	}
 
-	if err := m.db.MoveThreadToInbox(threadID, nextID); err != nil {
-		return func() tea.Msg {
-			return msgs.StatusMsg{Text: "Move failed: " + err.Error()}
+	m.moveInboxChoices = inboxes
+	m.moveInboxCursor = 0
+	m.moveInboxThreadID = threadID
+	m.showMoveInboxPicker = true
+
+	return nil
+}
+
+// renderMoveInboxPicker renders the interactive inbox selector overlay.
+func (m appModel) renderMoveInboxPicker() string {
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7D56F4")).
+		MarginBottom(1)
+
+	activeStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#0d1117")).
+		Background(lipgloss.Color("#58a6ff")).
+		Padding(0, 1)
+
+	normalStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#e2e4e8")).
+		Padding(0, 1)
+
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#555555")).
+		Italic(true)
+
+	var lines []string
+	lines = append(lines, titleStyle.Render("Move to Inbox"))
+
+	for i, inbox := range m.moveInboxChoices {
+		label := inbox.Label
+		if i == m.moveInboxCursor {
+			lines = append(lines, activeStyle.Render(label))
+		} else {
+			lines = append(lines, normalStyle.Render(label))
 		}
 	}
 
-	return tea.Batch(
-		func() tea.Msg { return msgs.ReloadInboxMsg{} },
-		func() tea.Msg { return msgs.InboxesChangedMsg{} },
-		func() tea.Msg { return msgs.StatusMsg{Text: "Moved to " + nextID} },
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("j/k navigate • Enter to select • Esc to cancel"))
+
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+
+	boxWidth := 32
+	if m.width > 0 && boxWidth > m.width-4 {
+		boxWidth = m.width - 4
+	}
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7D56F4")).
+		Width(boxWidth).
+		Padding(1, 2)
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		boxStyle.Render(content),
+	)
+}
+
+// senderInfoForThread returns the full sender email and domain for the given
+// thread, or empty strings if unavailable.
+func (m *appModel) senderInfoForThread(threadID string) (email, domain string) {
+	if m.db == nil {
+		return "", ""
+	}
+	threadMsgs, err := m.db.GetThreadMessages(threadID)
+	if err != nil || len(threadMsgs) == 0 {
+		return "", ""
+	}
+	from := threadMsgs[len(threadMsgs)-1].FromAddr
+	parts := strings.Split(from, "@")
+	if len(parts) == 2 {
+		return from, parts[1]
+	}
+	return from, ""
+}
+
+// renderRouteConfirm renders the "Route future emails from sender?" overlay.
+func (m appModel) renderRouteConfirm() string {
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7D56F4")).
+		MarginBottom(1)
+
+	promptStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#e2e4e8")).
+		Padding(0, 1)
+
+	yesStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#0d1117")).
+		Background(lipgloss.Color("#3fb950")).
+		Padding(0, 1)
+
+	noStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#0d1117")).
+		Background(lipgloss.Color("#FF6F61")).
+		Padding(0, 1)
+
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#555555")).
+		Italic(true)
+
+	var lines []string
+	lines = append(lines, titleStyle.Render("Route Future Emails?"))
+
+	prompt := fmt.Sprintf("Route future emails from %s to %s?",
+		m.routeConfirmSender, m.routeConfirmInbox)
+	lines = append(lines, promptStyle.Render(prompt))
+	lines = append(lines, "")
+	lines = append(lines, yesStyle.Render(" y ")+"  "+noStyle.Render(" n "))
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("y = choose scope • n = move only • Esc = cancel"))
+
+	content := lipgloss.JoinVertical(lipgloss.Center, lines...)
+
+	boxWidth := 50
+	if m.width > 0 && boxWidth > m.width-4 {
+		boxWidth = m.width - 4
+	}
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7D56F4")).
+		Width(boxWidth).
+		Padding(1, 2)
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		boxStyle.Render(content),
+	)
+}
+
+// renderRouteScope renders the exact-vs-domain scope picker.
+func (m appModel) renderRouteScope() string {
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7D56F4")).
+		MarginBottom(1)
+
+	promptStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#e2e4e8")).
+		Padding(0, 1)
+
+	exactStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#0d1117")).
+		Background(lipgloss.Color("#58a6ff")).
+		Padding(0, 1)
+
+	domainStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#0d1117")).
+		Background(lipgloss.Color("#a371f7")).
+		Padding(0, 1)
+
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#555555")).
+		Italic(true)
+
+	var lines []string
+	lines = append(lines, titleStyle.Render("Match Scope"))
+
+	prompt := fmt.Sprintf("Match exact address or entire domain for %s?",
+		m.routeConfirmSender)
+	lines = append(lines, promptStyle.Render(prompt))
+	lines = append(lines, "")
+	lines = append(lines, exactStyle.Render(" a ")+"  "+domainStyle.Render(" d "))
+	lines = append(lines, "")
+	lines = append(lines, dimStyle.Render("a = exact address • d = whole domain • Esc = cancel"))
+
+	content := lipgloss.JoinVertical(lipgloss.Center, lines...)
+
+	boxWidth := 50
+	if m.width > 0 && boxWidth > m.width-4 {
+		boxWidth = m.width - 4
+	}
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("#7D56F4")).
+		Width(boxWidth).
+		Padding(1, 2)
+
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		boxStyle.Render(content),
 	)
 }
 

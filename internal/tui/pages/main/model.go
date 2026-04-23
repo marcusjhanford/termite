@@ -86,6 +86,7 @@ func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) M
 		sb.SetAccount(cfg.Accounts[0].Name)
 	}
 	sb.SetInbox(activeInbox)
+	il.SetActiveInbox(activeInbox)
 
 	// Set initial focus on the thread list.
 	tl.SetFocused(true)
@@ -152,12 +153,13 @@ func refreshInboxList(il inboxlist.Model, database *db.DB) inboxlist.Model {
 }
 
 // RefreshInboxes updates the inbox list from the database and preserves the
-// current selection. Returns the updated model.
+// current selection and active inbox. Returns the updated model.
 func (m *Model) RefreshInboxes() {
 	if m.database == nil {
 		return
 	}
 	m.inboxList = refreshInboxList(m.inboxList, m.database)
+	m.inboxList.SetActiveInbox(m.activeInboxID)
 }
 
 // WithBackgroundSyncExpected returns a copy that shows a sync progress strip until
