@@ -179,7 +179,7 @@ func buildComposeBody(mode string, latest *db.Message, accountSignature string) 
 // If an account signature is configured it appears first; the termite
 // signature is always appended.
 func buildSignatureBlock(accountSignature string) string {
-	termiteSig := "Sent with termite (https://github.com/marcusjhanford/termite)"
+	termiteSig := "Sent with termite"
 
 	var parts []string
 	parts = append(parts, "--")
