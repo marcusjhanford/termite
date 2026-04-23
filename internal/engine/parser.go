@@ -95,15 +95,25 @@ func ParseRawMessage(raw RawMessage, accountID string) (*db.Message, error) {
 	return msg, nil
 }
 
-// EvaluateSplitInboxRules evaluates the split inbox rules against a message
-// and returns the ID of the first matching split inbox. If no rules match,
-// returns "primary" as the default.
-func EvaluateSplitInboxRules(msg *db.Message, inboxes []config.SplitInboxConfig) string {
+// EvaluateSplitInboxRules looks up the correct split inbox for a message.
+// It first checks the database sender_routes table, then falls back to
+// config-based rules, and finally returns "primary" as the default.
+func EvaluateSplitInboxRules(msg *db.Message, database *db.DB, inboxes []config.SplitInboxConfig) string {
+	// 1. Check DB sender routes first (exact, then domain).
+	if database != nil && msg.FromAddr != "" {
+		inboxID, err := database.GetInboxForSender(msg.FromAddr)
+		if err == nil && inboxID != "" {
+			return inboxID
+		}
+	}
+
+	// 2. Fall back to config-based rules.
 	for _, inbox := range inboxes {
 		if matchesInbox(msg, inbox) {
 			return inbox.ID
 		}
 	}
+
 	return "primary"
 }
 

@@ -77,3 +77,22 @@ type SearchResultsMsg struct {
 type CommandMsg struct {
 	Command string
 }
+
+// InboxesChangedMsg is sent when split inboxes are created, deleted, or
+// updated so the TUI can refresh the inbox list and counts.
+type InboxesChangedMsg struct{}
+
+// MoveThreadMsg requests moving a thread to a different split inbox.
+type MoveThreadMsg struct {
+	ThreadID    string
+	TargetInbox string
+	CreateRoute bool
+	MatchDomain bool
+	ApplyPast   bool
+}
+
+// SpamThreadMsg requests marking a thread as spam.
+type SpamThreadMsg struct {
+	ThreadID    string
+	ApplyPast   bool
+}

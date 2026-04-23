@@ -23,21 +23,9 @@ func Default() *Config {
 			ShowInStatusbar: true,
 			ToastMilestones: true,
 		},
-		Keybindings: DefaultKeybindings(),
-		Accounts:    nil,
-		SplitInboxes: []SplitInboxConfig{
-			{
-				ID:       "primary",
-				Label:    "Primary",
-				Accounts: nil, // all accounts
-				Rules: []InboxRule{
-					{
-						Field:       "from",
-						NotContains: []string{"newsletter", "noreply", "notifications"},
-					},
-				},
-			},
-		},
+		Keybindings:  DefaultKeybindings(),
+		Accounts:     nil,
+		SplitInboxes: nil,
 	}
 }
 

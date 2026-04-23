@@ -65,16 +65,11 @@ type Model struct {
 
 // New creates a main page model wired to real components.
 func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) Model {
-	// Build inbox items from config split inboxes.
-	items := make([]inboxlist.InboxItem, 0, len(cfg.SplitInboxes))
-	for _, si := range cfg.SplitInboxes {
-		items = append(items, inboxlist.InboxItem{
-			ID:    si.ID,
-			Label: si.Label,
-		})
+	il := inboxlist.New(nil)
+	if database != nil {
+		il = refreshInboxList(il, database)
 	}
 
-	il := inboxlist.New(items)
 	tl := threadlist.New()
 	mv := messageview.New()
 	sb := statusbar.New()
@@ -84,13 +79,6 @@ func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) M
 	activeInbox := cfg.General.StartupInbox
 	if activeInbox == "" {
 		activeInbox = "primary"
-	}
-	if len(cfg.SplitInboxes) > 0 && !splitInboxIDExists(cfg.SplitInboxes, activeInbox) {
-		if splitInboxIDExists(cfg.SplitInboxes, "primary") {
-			activeInbox = "primary"
-		} else {
-			activeInbox = cfg.SplitInboxes[0].ID
-		}
 	}
 
 	// Set initial status bar state.
@@ -136,13 +124,40 @@ func New(cfg *config.Config, database *db.DB, tracker *metrics.MetricsTracker) M
 	}
 }
 
-func splitInboxIDExists(inboxes []config.SplitInboxConfig, id string) bool {
-	for _, si := range inboxes {
-		if si.ID == id {
-			return true
+// refreshInboxList rebuilds the inbox list items from the database with
+// current unread counts. It preserves the current selection if possible.
+func refreshInboxList(il inboxlist.Model, database *db.DB) inboxlist.Model {
+	inboxes, err := database.ListSplitInboxes()
+	if err != nil {
+		slog.Warn("failed to load split inboxes", "err", err)
+		return il
+	}
+
+	counts, err := database.GetUnreadCountByInbox()
+	if err != nil {
+		slog.Warn("failed to load unread counts", "err", err)
+		counts = make(map[string]int)
+	}
+
+	items := make([]inboxlist.InboxItem, len(inboxes))
+	for i, inbox := range inboxes {
+		items[i] = inboxlist.InboxItem{
+			ID:          inbox.ID,
+			Label:       inbox.Label,
+			UnreadCount: counts[inbox.ID],
 		}
 	}
-	return false
+
+	return inboxlist.New(items)
+}
+
+// RefreshInboxes updates the inbox list from the database and preserves the
+// current selection. Returns the updated model.
+func (m *Model) RefreshInboxes() {
+	if m.database == nil {
+		return
+	}
+	m.inboxList = refreshInboxList(m.inboxList, m.database)
 }
 
 // WithBackgroundSyncExpected returns a copy that shows a sync progress strip until
@@ -187,6 +202,11 @@ func (m Model) SelectedThreadID() string {
 		return ""
 	}
 	return t.ID
+}
+
+// ActiveInboxID returns the currently active split inbox ID.
+func (m Model) ActiveInboxID() string {
+	return m.activeInboxID
 }
 
 // SetEmbedCompose toggles splitting the message column for inline reply/forward compose.

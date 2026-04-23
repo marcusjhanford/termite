@@ -218,7 +218,7 @@ func parseAndInsert(rawMessages []RawMessage, accountID string, database *db.DB,
 		}
 
 		// Determine split inbox for the thread based on the first message.
-		splitInboxID := EvaluateSplitInboxRules(&threadMsgs[0], splitInboxes)
+		splitInboxID := EvaluateSplitInboxRules(&threadMsgs[0], database, splitInboxes)
 
 		// Count unread messages in the thread.
 		unreadCount := 0

@@ -478,6 +478,61 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = "Exporting metrics as " + msg.Format + "..."
 		return m, nil
 
+	case commands.CreateInboxMsg:
+		if m.db == nil {
+			m.statusMsg = "No database available"
+			return m, nil
+		}
+		if err := m.db.CreateSplitInbox(msg.ID, msg.Label, 0); err != nil {
+			m.statusMsg = "Failed to create inbox: " + err.Error()
+			return m, nil
+		}
+		m.statusMsg = "Inbox created: " + msg.Label
+		return m, m.refreshInboxesCmd()
+
+	case commands.DeleteInboxMsg:
+		if m.db == nil {
+			m.statusMsg = "No database available"
+			return m, nil
+		}
+		if msg.ID == "primary" || msg.ID == "spam" {
+			m.statusMsg = "Cannot delete system inbox: " + msg.ID
+			return m, nil
+		}
+		if err := m.db.DeleteSplitInbox(msg.ID); err != nil {
+			m.statusMsg = "Failed to delete inbox: " + err.Error()
+			return m, nil
+		}
+		m.statusMsg = "Inbox deleted: " + msg.ID
+		return m, m.refreshInboxesCmd()
+
+	case commands.ListInboxesMsg:
+		if m.db == nil {
+			m.statusMsg = "No database available"
+			return m, nil
+		}
+		inboxes, err := m.db.ListSplitInboxes()
+		if err != nil {
+			m.statusMsg = "Failed to list inboxes: " + err.Error()
+			return m, nil
+		}
+		var names []string
+		for _, inbox := range inboxes {
+			names = append(names, inbox.Label)
+		}
+		m.statusMsg = "Inboxes: " + strings.Join(names, ", ")
+		return m, nil
+
+	case msgs.InboxesChangedMsg:
+		m.mainPage.RefreshInboxes()
+		return m, m.loadInboxZeroCmd()
+
+	case msgs.MoveThreadMsg:
+		return m, m.handleMoveThread(msg)
+
+	case msgs.SpamThreadMsg:
+		return m, m.handleSpamThread(msg)
+
 	case tea.KeyPressMsg:
 		keyStr := msg.String()
 
@@ -606,6 +661,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.deleteSelected()
 			case "m":
 				return m, m.markSelectedRead()
+			case "v":
+				return m, m.moveToNextInbox()
+			case "!":
+				return m, m.markSpamSelected()
 			}
 			// All other keys (tab, j, k, /, :, etc.) fall through
 			// to the active page router below.
@@ -737,6 +796,8 @@ func (m appModel) renderHelp() string {
 	lines = append(lines, row("e", "Archive thread"))
 	lines = append(lines, row("d", "Delete thread"))
 	lines = append(lines, row("m", "Mark as read"))
+	lines = append(lines, row("v", "Move to next inbox"))
+	lines = append(lines, row("!", "Mark as spam"))
 
 	lines = append(lines, sectionStyle.Render("Command & Search"))
 	lines = append(lines, row("/", "Search messages"))
@@ -1033,4 +1094,173 @@ func (m *appModel) markSelectedRead() tea.Cmd {
 	return func() tea.Msg {
 		return msgs.ReloadInboxMsg{}
 	}
+}
+
+// refreshInboxesCmd returns a command that refreshes the inbox list.
+func (m *appModel) refreshInboxesCmd() tea.Cmd {
+	return func() tea.Msg {
+		return msgs.InboxesChangedMsg{}
+	}
+}
+
+// loadInboxZeroCmd triggers an inbox zero check after a refresh.
+func (m *appModel) loadInboxZeroCmd() tea.Cmd {
+	return func() tea.Msg {
+		return msgs.ReloadInboxMsg{}
+	}
+}
+
+// handleMoveThread processes a MoveThreadMsg: moves the thread, optionally
+// creates a sender route, and optionally applies retroactively.
+func (m *appModel) handleMoveThread(msg msgs.MoveThreadMsg) tea.Cmd {
+	if m.db == nil {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "No database available"}
+		}
+	}
+	if err := m.db.MoveThreadToInbox(msg.ThreadID, msg.TargetInbox); err != nil {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "Move failed: " + err.Error()}
+		}
+	}
+
+	var result []string
+	result = append(result, "Moved to "+msg.TargetInbox)
+
+	if msg.CreateRoute {
+		// Look up the sender of the thread.
+		threadMsgs, err := m.db.GetThreadMessages(msg.ThreadID)
+		if err == nil && len(threadMsgs) > 0 {
+			from := threadMsgs[len(threadMsgs)-1].FromAddr
+			pattern := from
+			matchType := "exact"
+			if msg.MatchDomain {
+				parts := strings.Split(from, "@")
+				if len(parts) == 2 {
+					pattern = parts[1]
+					matchType = "domain"
+				}
+			}
+			if pattern != "" {
+				_ = m.db.CreateSenderRoute(pattern, matchType, msg.TargetInbox)
+				result = append(result, "Routed "+pattern+" to "+msg.TargetInbox)
+			}
+			if msg.ApplyPast {
+				_ = m.db.ApplyRouteRetroactively(pattern, matchType, msg.TargetInbox)
+				result = append(result, "Applied to existing emails")
+			}
+		}
+	}
+
+	statusText := strings.Join(result, " • ")
+	return tea.Batch(
+		func() tea.Msg { return msgs.ReloadInboxMsg{} },
+		func() tea.Msg { return msgs.InboxesChangedMsg{} },
+		func() tea.Msg { return msgs.StatusMsg{Text: statusText} },
+	)
+}
+
+// handleSpamThread marks the selected thread as spam, creates a domain route,
+// and optionally applies retroactively.
+func (m *appModel) handleSpamThread(msg msgs.SpamThreadMsg) tea.Cmd {
+	if m.db == nil {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "No database available"}
+		}
+	}
+	threadID := msg.ThreadID
+	if threadID == "" {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "No thread selected"}
+		}
+	}
+
+	if err := m.db.MoveThreadToInbox(threadID, "spam"); err != nil {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "Spam move failed: " + err.Error()}
+		}
+	}
+
+	// Create domain route.
+	threadMsgs, err := m.db.GetThreadMessages(threadID)
+	if err == nil && len(threadMsgs) > 0 {
+		from := threadMsgs[len(threadMsgs)-1].FromAddr
+		parts := strings.Split(from, "@")
+		if len(parts) == 2 {
+			domain := parts[1]
+			_ = m.db.CreateSenderRoute(domain, "domain", "spam")
+			if msg.ApplyPast {
+				_ = m.db.ApplyRouteRetroactively(domain, "domain", "spam")
+			}
+		}
+	}
+
+	status := "Marked as spam"
+	if msg.ApplyPast {
+		status += " + applied to existing"
+	}
+
+	return tea.Batch(
+		func() tea.Msg { return msgs.ReloadInboxMsg{} },
+		func() tea.Msg { return msgs.InboxesChangedMsg{} },
+		func() tea.Msg { return msgs.StatusMsg{Text: status} },
+	)
+}
+
+// moveToNextInbox moves the selected thread to the next inbox in the list.
+func (m *appModel) moveToNextInbox() tea.Cmd {
+	if m.db == nil {
+		return nil
+	}
+	threadID := m.mainPage.SelectedThreadID()
+	if threadID == "" {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "No thread selected"}
+		}
+	}
+
+	// Find the next inbox ID after the current one.
+	nextID := ""
+	inboxes, _ := m.db.ListSplitInboxes()
+	for i, inbox := range inboxes {
+		if inbox.ID == m.mainPage.ActiveInboxID() {
+			if i+1 < len(inboxes) {
+				nextID = inboxes[i+1].ID
+			} else {
+				nextID = inboxes[0].ID
+			}
+			break
+		}
+	}
+	if nextID == "" {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "No other inbox available"}
+		}
+	}
+
+	if err := m.db.MoveThreadToInbox(threadID, nextID); err != nil {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "Move failed: " + err.Error()}
+		}
+	}
+
+	return tea.Batch(
+		func() tea.Msg { return msgs.ReloadInboxMsg{} },
+		func() tea.Msg { return msgs.InboxesChangedMsg{} },
+		func() tea.Msg { return msgs.StatusMsg{Text: "Moved to " + nextID} },
+	)
+}
+
+// markSpamSelected moves the selected thread to spam and creates a domain route.
+func (m *appModel) markSpamSelected() tea.Cmd {
+	if m.db == nil {
+		return nil
+	}
+	threadID := m.mainPage.SelectedThreadID()
+	if threadID == "" {
+		return func() tea.Msg {
+			return msgs.StatusMsg{Text: "No thread selected"}
+		}
+	}
+	return m.handleSpamThread(msgs.SpamThreadMsg{ThreadID: threadID, ApplyPast: true})
 }

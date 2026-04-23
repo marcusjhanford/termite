@@ -125,6 +125,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		cmd := m.loadThreadsForInbox(m.activeInboxID)
 		m.statusBar.SetSyncStatus(fmt.Sprintf("+%d new", msg.Count))
 		return m, cmd
+
+	case msgs.InboxesChangedMsg:
+		m.RefreshInboxes()
+		m.propagateSizes()
+		return m, m.loadThreadsForInbox(m.activeInboxID)
 	}
 
 	return m, tea.Batch(cmds...)

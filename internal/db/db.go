@@ -413,3 +413,195 @@ type Thread struct {
 	IsDeleted     bool          `db:"is_deleted"`
 	SplitInboxID  string        `db:"split_inbox_id"`
 }
+
+// SplitInbox represents a user-created split inbox.
+type SplitInbox struct {
+	ID         string `db:"id"`
+	Label      string `db:"label"`
+	SortOrder  int    `db:"sort_order"`
+	CreatedAt  int64  `db:"created_at"`
+	UnreadCount int   // computed, not stored
+}
+
+// SenderRoute maps a sender pattern to a split inbox.
+type SenderRoute struct {
+	ID           string `db:"id"`
+	Pattern      string `db:"pattern"`
+	MatchType    string `db:"match_type"`
+	SplitInboxID string `db:"split_inbox_id"`
+	CreatedAt    int64  `db:"created_at"`
+}
+
+// --- Split Inbox Management ---
+
+// CreateSplitInbox inserts a new split inbox into the database.
+func (db *DB) CreateSplitInbox(id, label string, sortOrder int) error {
+	_, err := db.Exec(`
+		INSERT INTO split_inboxes (id, label, sort_order, created_at)
+		VALUES (?, ?, ?, strftime('%s','now'))
+		ON CONFLICT(id) DO UPDATE SET label=excluded.label, sort_order=excluded.sort_order
+	`, id, label, sortOrder)
+	return err
+}
+
+// DeleteSplitInbox removes a split inbox. Threads in that inbox move to 'primary'.
+func (db *DB) DeleteSplitInbox(id string) error {
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec("UPDATE threads SET split_inbox_id = 'primary' WHERE split_inbox_id = ?", id)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec("DELETE FROM sender_routes WHERE split_inbox_id = ?", id)
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.Exec("DELETE FROM split_inboxes WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// ListSplitInboxes returns all split inboxes ordered by sort_order.
+func (db *DB) ListSplitInboxes() ([]SplitInbox, error) {
+	var inboxes []SplitInbox
+	err := db.Select(&inboxes, `
+		SELECT id, label, sort_order, created_at
+		FROM split_inboxes
+		ORDER BY sort_order ASC, created_at ASC
+	`)
+	return inboxes, err
+}
+
+// GetUnreadCountByInbox returns a map of inbox ID -> unread count.
+func (db *DB) GetUnreadCountByInbox() (map[string]int, error) {
+	rows, err := db.Query(`
+		SELECT split_inbox_id, COALESCE(SUM(unread_count), 0)
+		FROM threads
+		WHERE is_archived = 0 AND is_deleted = 0
+		GROUP BY split_inbox_id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var id string
+		var c int
+		if err := rows.Scan(&id, &c); err != nil {
+			return nil, err
+		}
+		counts[id] = c
+	}
+	return counts, rows.Err()
+}
+
+// MoveThreadToInbox updates a thread's split_inbox_id.
+func (db *DB) MoveThreadToInbox(threadID, inboxID string) error {
+	_, err := db.Exec(`
+		UPDATE threads SET split_inbox_id = ? WHERE id = ?
+	`, inboxID, threadID)
+	return err
+}
+
+// --- Sender Routes ---
+
+// CreateSenderRoute adds a new sender route.
+func (db *DB) CreateSenderRoute(pattern, matchType, inboxID string) error {
+	id := fmt.Sprintf("%s|%s|%s", pattern, matchType, inboxID)
+	_, err := db.Exec(`
+		INSERT INTO sender_routes (id, pattern, match_type, split_inbox_id, created_at)
+		VALUES (?, ?, ?, ?, strftime('%s','now'))
+		ON CONFLICT(id) DO UPDATE SET split_inbox_id=excluded.split_inbox_id
+	`, id, pattern, matchType, inboxID)
+	return err
+}
+
+// DeleteSenderRoute removes a sender route by its composite ID.
+func (db *DB) DeleteSenderRoute(id string) error {
+	_, err := db.Exec("DELETE FROM sender_routes WHERE id = ?", id)
+	return err
+}
+
+// GetSenderRoutes returns all sender routes.
+func (db *DB) GetSenderRoutes() ([]SenderRoute, error) {
+	var routes []SenderRoute
+	err := db.Select(&routes, `
+		SELECT id, pattern, match_type, split_inbox_id, created_at
+		FROM sender_routes
+		ORDER BY created_at DESC
+	`)
+	return routes, err
+}
+
+// GetInboxForSender looks up the split inbox for a given from address.
+// Exact match takes precedence over domain match.
+func (db *DB) GetInboxForSender(fromAddr string) (string, error) {
+	var inboxID string
+
+	// Exact match.
+	err := db.Get(&inboxID, `
+		SELECT split_inbox_id FROM sender_routes
+		WHERE pattern = ? AND match_type = 'exact'
+		LIMIT 1
+	`, fromAddr)
+	if err == nil {
+		return inboxID, nil
+	}
+
+	// Domain match.
+	parts := strings.Split(fromAddr, "@")
+	if len(parts) == 2 {
+		domain := parts[1]
+		err = db.Get(&inboxID, `
+			SELECT split_inbox_id FROM sender_routes
+			WHERE pattern = ? AND match_type = 'domain'
+			LIMIT 1
+		`, domain)
+		if err == nil {
+			return inboxID, nil
+		}
+	}
+
+	return "", nil
+}
+
+// ApplyRouteRetroactively moves all existing matching threads to the target inbox.
+func (db *DB) ApplyRouteRetroactively(pattern, matchType, inboxID string) error {
+	var query string
+	var arg string
+	if matchType == "exact" {
+		query = `
+			UPDATE threads
+			SET split_inbox_id = ?
+			WHERE id IN (
+				SELECT DISTINCT thread_id FROM messages
+				WHERE from_addr = ?
+			)
+		`
+		arg = pattern
+	} else {
+		query = `
+			UPDATE threads
+			SET split_inbox_id = ?
+			WHERE id IN (
+				SELECT DISTINCT thread_id FROM messages
+				WHERE from_addr LIKE ?
+			)
+		`
+		arg = "%@" + pattern
+	}
+	_, err := db.Exec(query, inboxID, arg)
+	return err
+}
+
