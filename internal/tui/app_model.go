@@ -1164,16 +1164,30 @@ func (m *appModel) initCompose(mode, threadID string) {
 		emails = append(emails, m.cfg.Accounts[i].Email)
 	}
 
-	// Determine default account for sending.
+	// Determine default account for sending and its signature.
 	defaultAccountID := m.activeAccountID
+	var accountSignature string
+	for _, acct := range m.cfg.Accounts {
+		if acct.ID == defaultAccountID {
+			accountSignature = acct.Signature
+			break
+		}
+	}
 	if threadID != "" && m.db != nil {
 		// For reply/forward, default to the account that received the thread.
 		if acctID, err := m.db.GetThreadAccountID(threadID); err == nil && acctID != "" {
 			defaultAccountID = acctID
+			// Update signature to match the thread's account.
+			for _, acct := range m.cfg.Accounts {
+				if acct.ID == acctID {
+					accountSignature = acct.Signature
+					break
+				}
+			}
 		}
 	}
 
-	m.composePage = composepage.FromThreadDraft(mode, threadID, latest, emails, defaultAccountID)
+	m.composePage = composepage.FromThreadDraft(mode, threadID, latest, emails, defaultAccountID, accountSignature)
 	m.composeSplit = needsThread
 
 	if m.composeSplit {

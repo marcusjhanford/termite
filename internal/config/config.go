@@ -66,10 +66,11 @@ type KeybindingsConfig struct {
 
 // AccountConfig defines an email account.
 type AccountConfig struct {
-	ID       string `toml:"id" validate:"required"`
-	Name     string `toml:"name" validate:"required"`
-	Email    string `toml:"email" validate:"required,email"`
-	Provider string `toml:"provider" validate:"required,oneof=gmail outlook fastmail generic"`
+	ID        string `toml:"id" validate:"required"`
+	Name      string `toml:"name" validate:"required"`
+	Email     string `toml:"email" validate:"required,email"`
+	Provider  string `toml:"provider" validate:"required,oneof=gmail outlook fastmail generic"`
+	Signature string `toml:"signature"`
 }
 
 // SplitInboxConfig defines a split inbox with filtering rules.
