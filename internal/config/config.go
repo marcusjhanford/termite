@@ -25,6 +25,7 @@ type GeneralConfig struct {
 	CheckIntervalSeconds int    `toml:"check_interval_seconds" validate:"min=10"`
 	StartupInbox         string `toml:"startup_inbox"`
 	ReduceMotion         bool   `toml:"reduce_motion"`
+	AutoStartDaemon      bool   `toml:"auto_start_daemon"`
 }
 
 // NotificationConfig controls notification behavior.

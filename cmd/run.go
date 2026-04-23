@@ -10,12 +10,17 @@ import (
 
 	"github.com/termite-mail/termite/internal/app"
 	"github.com/termite-mail/termite/internal/config"
+	termitelog "github.com/termite-mail/termite/internal/log"
 )
 
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Launch the Termite TUI",
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := termitelog.SetupFileLogger(); err != nil {
+			fmt.Fprintf(os.Stderr, "termite: failed to setup logger: %v\n", err)
+		}
+
 		cfg, err := config.Load(cfgFile)
 		if err != nil {
 			slog.Info("no config found, creating default config")

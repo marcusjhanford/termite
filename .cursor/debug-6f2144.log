@@ -1,0 +1,9 @@
+{"data":{"selectedID":"thread_a755ed842bd1a8c7da221f85"},"hypothesisId":"H6","location":"app_model:key e","message":"archive key pressed","sessionId":"6f2144","timestamp":1776912863141}
+{"data":{"code":105,"keyStr":"I","match":false,"mod":1},"hypothesisId":"H2-H3","location":"compose/edit.go:isSendComposerKey","message":"send key evaluation","sessionId":"6f2144","timestamp":1776912871482}
+{"data":{"code":105,"keyStr":"I","mod":1,"sendMatch":false},"hypothesisId":"H1-H4","location":"compose/update.go:KeyPressMsg","message":"compose key (enter/mod)","sessionId":"6f2144","timestamp":1776912871482}
+{"data":{"code":105,"keyStr":"I","match":false,"mod":1},"hypothesisId":"H2-H3","location":"compose/edit.go:isSendComposerKey","message":"send key evaluation","sessionId":"6f2144","timestamp":1776912871482}
+{"data":{"code":13,"keyStr":"ctrl+enter","match":true,"mod":4},"hypothesisId":"H2-H3","location":"compose/edit.go:isSendComposerKey","message":"send key evaluation","sessionId":"6f2144","timestamp":1776912887651}
+{"data":{"code":13,"keyStr":"ctrl+enter","mod":4,"sendMatch":true},"hypothesisId":"H1-H4","location":"compose/update.go:KeyPressMsg","message":"compose key (enter/mod)","sessionId":"6f2144","timestamp":1776912887651}
+{"data":{"code":13,"keyStr":"ctrl+enter","match":true,"mod":4},"hypothesisId":"H2-H3","location":"compose/edit.go:isSendComposerKey","message":"send key evaluation","sessionId":"6f2144","timestamp":1776912887651}
+{"data":{"accountID":"mjh@csquared.nl"},"hypothesisId":"H4-fix","location":"app_model:MailSendResultMsg","message":"send completed","sessionId":"6f2144","timestamp":1776912889152}
+{"data":{"selectedID":"thread_72ee6a0dd42839039e3af033"},"hypothesisId":"H6","location":"app_model:key e","message":"archive key pressed","sessionId":"6f2144","timestamp":1776912894443}

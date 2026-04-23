@@ -9,6 +9,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 
 	"github.com/termite-mail/termite/internal/config"
+	"github.com/termite-mail/termite/internal/daemon"
 	"github.com/termite-mail/termite/internal/db"
 	"github.com/termite-mail/termite/internal/debuglog"
 	"github.com/termite-mail/termite/internal/engine"
@@ -67,6 +68,9 @@ type appModel struct {
 
 	// composeSplit shows the inbox (main) above the compose pane for reply/forward.
 	composeSplit bool
+
+	// daemon is the optional in-process background sync daemon.
+	daemon *daemon.Daemon
 }
 
 // NewAppModel creates the root application model.
@@ -75,6 +79,7 @@ func NewAppModel(
 	database *db.DB,
 	themeManager *themes.ThemeManager,
 	tracker *metrics.MetricsTracker,
+	dmn *daemon.Daemon,
 ) appModel {
 	km := BuildKeyMap(cfg)
 
@@ -120,16 +125,42 @@ func NewAppModel(
 		metricsPage:    metricsdashboard.New(),
 		cmdRegistry:    reg,
 		milestoneToast: milestonetoast.New(),
+		daemon:         dmn,
 	}
 }
 
 // Init implements tea.Model. It kicks off the initial IMAP sync for every
 // configured account so the inbox is populated as soon as the TUI appears.
+// If a background daemon is running, it also starts listening for sync events.
 func (m appModel) Init() tea.Cmd {
-	if len(m.cfg.Accounts) == 0 || m.db == nil {
+	var cmds []tea.Cmd
+	if len(m.cfg.Accounts) > 0 && m.db != nil {
+		cmds = append(cmds, mainpage.SyncPulseCmd(), m.startInitialSync())
+	}
+	if m.daemon != nil && m.daemon.Running() {
+		cmds = append(cmds, m.listenDaemonEvents())
+	}
+	if len(cmds) == 0 {
 		return nil
 	}
-	return tea.Batch(mainpage.SyncPulseCmd(), m.startInitialSync())
+	return tea.Batch(cmds...)
+}
+
+// listenDaemonEvents blocks on the daemon event channel and returns a
+// NewMailMsg whenever the daemon finds new mail. It re-queues itself so
+// the listener stays alive for the lifetime of the TUI.
+func (m appModel) listenDaemonEvents() tea.Cmd {
+	return func() tea.Msg {
+		events := m.daemon.Events()
+		if events == nil {
+			return nil
+		}
+		ev, ok := <-events
+		if !ok {
+			return nil
+		}
+		return msgs.NewMailMsg{AccountID: ev.AccountID, Count: ev.NewCount}
+	}
 }
 
 // startInitialSync returns a tea.Batch that launches one sync command per
@@ -244,6 +275,10 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.mainPage, cmd = m.mainPage.Update(msg)
 		cmds = append(cmds, cmd)
+		// Re-queue the daemon event listener so it stays alive.
+		if m.daemon != nil && m.daemon.Running() {
+			cmds = append(cmds, m.listenDaemonEvents())
+		}
 		return m, tea.Batch(cmds...)
 
 	case msgs.ReloadInboxMsg:
@@ -403,15 +438,40 @@ func (m appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case commands.DaemonStatusMsg:
-		m.statusMsg = "Daemon: checking status..."
+		if m.daemon != nil && m.daemon.Running() {
+			m.statusMsg = "Daemon: running"
+		} else {
+			m.statusMsg = "Daemon: stopped"
+		}
 		return m, nil
 
 	case commands.DaemonStartMsg:
-		m.statusMsg = "Daemon: starting..."
-		return m, nil
+		if m.daemon == nil {
+			m.statusMsg = "Daemon: not available"
+			return m, nil
+		}
+		if m.daemon.Running() {
+			m.statusMsg = "Daemon: already running"
+			return m, nil
+		}
+		if err := m.daemon.Start(); err != nil {
+			m.statusMsg = "Daemon: start failed: " + err.Error()
+			return m, nil
+		}
+		m.statusMsg = "Daemon: started"
+		return m, m.listenDaemonEvents()
 
 	case commands.DaemonStopMsg:
-		m.statusMsg = "Daemon: stopping..."
+		if m.daemon == nil {
+			m.statusMsg = "Daemon: not available"
+			return m, nil
+		}
+		if !m.daemon.Running() {
+			m.statusMsg = "Daemon: already stopped"
+			return m, nil
+		}
+		m.daemon.Stop()
+		m.statusMsg = "Daemon: stopped"
 		return m, nil
 
 	case commands.MetricsExportMsg:

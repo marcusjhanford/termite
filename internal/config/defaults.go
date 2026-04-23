@@ -9,6 +9,7 @@ func Default() *Config {
 			CheckIntervalSeconds: 60,
 			StartupInbox:         "primary",
 			ReduceMotion:         false,
+			AutoStartDaemon:      true,
 		},
 		Notifications: NotificationConfig{
 			Desktop:      true,

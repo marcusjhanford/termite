@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/termite-mail/termite/internal/config"
+	"github.com/termite-mail/termite/internal/daemon"
 	"github.com/termite-mail/termite/internal/db"
 	"github.com/termite-mail/termite/internal/metrics"
 	"github.com/termite-mail/termite/internal/themes"
@@ -13,12 +14,13 @@ import (
 )
 
 // App wires together all top-level application dependencies: configuration,
-// database, theme management, and productivity metrics.
+// database, theme management, productivity metrics, and the background sync daemon.
 type App struct {
 	Config       *config.Config
 	DB           *db.DB
 	ThemeManager *themes.ThemeManager
 	Metrics      *metrics.MetricsTracker
+	Daemon       *daemon.Daemon
 }
 
 // New creates a new App from the given configuration. It opens the database,
@@ -46,17 +48,37 @@ func New(cfg *config.Config) (*App, error) {
 
 	tracker := metrics.NewTracker(database)
 
-	return &App{
+	app := &App{
 		Config:       cfg,
 		DB:           database,
 		ThemeManager: tm,
 		Metrics:      tracker,
-	}, nil
+	}
+
+	if cfg.General.AutoStartDaemon && len(cfg.Accounts) > 0 {
+		d, err := daemon.New(cfg, database, true)
+		if err != nil {
+			// Non-fatal: the TUI should still start even if the daemon can't.
+			_ = err
+		} else {
+			if err := d.Start(); err != nil {
+				_ = err
+			} else {
+				app.Daemon = d
+			}
+		}
+	}
+
+	return app, nil
 }
 
-// Close releases all resources held by the App. It flushes the current
-// metrics session and closes the database.
+// Close releases all resources held by the App. It stops the background
+// daemon, flushes metrics, and closes the database.
 func (a *App) Close() error {
+	if a.Daemon != nil {
+		a.Daemon.Stop()
+	}
+
 	// Flush the in-progress session metrics.
 	if a.Metrics != nil {
 		_ = a.Metrics.FlushSession()
@@ -71,5 +93,5 @@ func (a *App) Close() error {
 // NewTUIModel creates and returns the root Bubble Tea model for the TUI,
 // fully wired with the App's dependencies.
 func (a *App) NewTUIModel() tea.Model {
-	return tui.NewAppModel(a.Config, a.DB, a.ThemeManager, a.Metrics)
+	return tui.NewAppModel(a.Config, a.DB, a.ThemeManager, a.Metrics, a.Daemon)
 }
