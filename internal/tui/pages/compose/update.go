@@ -88,7 +88,25 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Enter: newline in body, advance field otherwise.
+		// Arrow keys for cursor navigation in body field.
+		if m.activeField == fieldBody {
+			switch keyStr {
+			case "left":
+				m.moveBodyCursorLeft()
+				return m, nil
+			case "right":
+				m.moveBodyCursorRight()
+				return m, nil
+			case "up":
+				m.moveBodyCursorUp()
+				return m, nil
+			case "down":
+				m.moveBodyCursorDown()
+				return m, nil
+			}
+		}
+
+		// Enter: newline in body (insert at cursor), advance field otherwise.
 		// When on From field, Enter cycles the account instead.
 		if keyStr == "enter" {
 			if m.activeField == fieldFrom {
@@ -96,7 +114,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.activeField == fieldBody {
-				m.body += "\n"
+				m.insertAtBodyCursor("\n")
 			} else {
 				m.activeField = (m.activeField + 1) % fieldCount
 				m.updateEmailMatches()
@@ -113,7 +131,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 		// Backspace.
 		if keyStr == "backspace" {
-			m.deleteCharFromActive()
+			if m.activeField == fieldBody {
+				m.deleteCharAtBodyCursor()
+			} else {
+				m.deleteCharFromActive()
+			}
 			m.updateEmailMatches()
 			return m, nil
 		}
@@ -168,6 +190,7 @@ func (m Model) sendCmd() tea.Cmd {
 }
 
 // appendToActive appends a character to the currently focused field.
+// For body, it inserts at the cursor position.
 func (m *Model) appendToActive(ch string) {
 	switch m.activeField {
 	case fieldTo:
@@ -179,8 +202,136 @@ func (m *Model) appendToActive(ch string) {
 	case fieldSubject:
 		m.subject += ch
 	case fieldBody:
-		m.body += ch
+		m.insertAtBodyCursor(ch)
 	}
+}
+
+// insertAtBodyCursor inserts text at the current cursor position in the body.
+func (m *Model) insertAtBodyCursor(text string) {
+	pos := m.bodyCursorPos
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(m.body) {
+		pos = len(m.body)
+	}
+	m.body = m.body[:pos] + text + m.body[pos:]
+	m.bodyCursorPos = pos + len(text)
+}
+
+// deleteCharAtBodyCursor deletes the rune before the cursor position.
+func (m *Model) deleteCharAtBodyCursor() {
+	if m.bodyCursorPos <= 0 || len(m.body) == 0 {
+		return
+	}
+	// Find byte boundary of the rune before cursor.
+	before := m.body[:m.bodyCursorPos]
+	_, size := utf8.DecodeLastRuneInString(before)
+	m.body = before[:len(before)-size] + m.body[m.bodyCursorPos:]
+	m.bodyCursorPos -= size
+	if m.bodyCursorPos < 0 {
+		m.bodyCursorPos = 0
+	}
+}
+
+// moveBodyCursorLeft moves the cursor one rune left.
+func (m *Model) moveBodyCursorLeft() {
+	if m.bodyCursorPos <= 0 {
+		return
+	}
+	before := m.body[:m.bodyCursorPos]
+	_, size := utf8.DecodeLastRuneInString(before)
+	m.bodyCursorPos -= size
+	if m.bodyCursorPos < 0 {
+		m.bodyCursorPos = 0
+	}
+}
+
+// moveBodyCursorRight moves the cursor one rune right.
+func (m *Model) moveBodyCursorRight() {
+	if m.bodyCursorPos >= len(m.body) {
+		return
+	}
+	_, size := utf8.DecodeRuneInString(m.body[m.bodyCursorPos:])
+	m.bodyCursorPos += size
+	if m.bodyCursorPos > len(m.body) {
+		m.bodyCursorPos = len(m.body)
+	}
+}
+
+// moveBodyCursorUp moves the cursor to the previous line.
+func (m *Model) moveBodyCursorUp() {
+	lines := strings.Split(m.body, "\n")
+	// Find which line and column the cursor is on.
+	lineIdx, colIdx := cursorLineCol(m.body, m.bodyCursorPos)
+	if lineIdx <= 0 {
+		// Already on first line — move to start.
+		m.bodyCursorPos = 0
+		return
+	}
+	prevLine := lines[lineIdx-1]
+	if colIdx > len(prevLine) {
+		colIdx = len(prevLine)
+	}
+	// Recompute byte position.
+	m.bodyCursorPos = lineColToPos(m.body, lineIdx-1, colIdx)
+}
+
+// moveBodyCursorDown moves the cursor to the next line.
+func (m *Model) moveBodyCursorDown() {
+	lines := strings.Split(m.body, "\n")
+	lineIdx, colIdx := cursorLineCol(m.body, m.bodyCursorPos)
+	if lineIdx >= len(lines)-1 {
+		// Already on last line — move to end.
+		m.bodyCursorPos = len(m.body)
+		return
+	}
+	nextLine := lines[lineIdx+1]
+	if colIdx > len(nextLine) {
+		colIdx = len(nextLine)
+	}
+	m.bodyCursorPos = lineColToPos(m.body, lineIdx+1, colIdx)
+}
+
+// cursorLineCol returns the line index and column index (in runes) for the
+// given byte position in a multi-line string.
+func cursorLineCol(s string, pos int) (lineIdx, colIdx int) {
+	if pos < 0 {
+		return 0, 0
+	}
+	currentPos := 0
+	for i, r := range s {
+		if i >= pos {
+			break
+		}
+		if r == '\n' {
+			lineIdx++
+			colIdx = 0
+		} else {
+			colIdx++
+		}
+		currentPos++
+	}
+	return lineIdx, colIdx
+}
+
+// lineColToPos returns the byte position for the given line and column (in
+// runes) in a multi-line string.
+func lineColToPos(s string, targetLine, targetCol int) int {
+	lineIdx := 0
+	colIdx := 0
+	for i, r := range s {
+		if lineIdx == targetLine && colIdx == targetCol {
+			return i
+		}
+		if r == '\n' {
+			lineIdx++
+			colIdx = 0
+		} else {
+			colIdx++
+		}
+	}
+	return len(s)
 }
 
 // setActiveValue replaces the value of the active field.
@@ -196,6 +347,7 @@ func (m *Model) setActiveValue(val string) {
 		m.subject = val
 	case fieldBody:
 		m.body = val
+		m.bodyCursorPos = len(val)
 	}
 }
 
@@ -229,6 +381,7 @@ func (m *Model) deleteCharFromActive() {
 		m.subject = dropLastRune(m.subject)
 	case fieldBody:
 		m.body = dropLastRune(m.body)
+		m.bodyCursorPos = len(m.body)
 	}
 }
 

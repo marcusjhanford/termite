@@ -27,6 +27,7 @@ func FromThreadDraft(mode, threadID string, latest *db.Message, accountEmails []
 		m.cc = ""
 		m.subject = normalizeReplySubject(latest.Subject)
 		m.body = buildComposeBody(mode, latest, accountSignature)
+		m.bodyCursorPos = 0
 		m.activeField = fieldBody
 	case "replyall":
 		to, cc := replyAllRecipients(latest, self)
@@ -34,15 +35,18 @@ func FromThreadDraft(mode, threadID string, latest *db.Message, accountEmails []
 		m.cc = cc
 		m.subject = normalizeReplySubject(latest.Subject)
 		m.body = buildComposeBody(mode, latest, accountSignature)
+		m.bodyCursorPos = 0
 		m.activeField = fieldBody
 	case "forward":
 		m.to = ""
 		m.cc = ""
 		m.subject = normalizeForwardSubject(latest.Subject)
 		m.body = buildComposeBody(mode, latest, accountSignature)
+		m.bodyCursorPos = 0
 		m.activeField = fieldTo
 	case "new":
 		m.body = buildComposeBody(mode, latest, accountSignature)
+		m.bodyCursorPos = 0
 	}
 
 	return m
@@ -150,26 +154,18 @@ func replyAllRecipients(msg *db.Message, self map[string]bool) (to string, cc st
 }
 
 // buildComposeBody assembles the pre-filled body text for a compose draft.
-// For new messages: just the signature block.
-// For replies/forwards: signature block + quoted original message history.
+// The cursor starts on the first blank line; the signature block sits below
+// so the user types above it.
 func buildComposeBody(mode string, latest *db.Message, accountSignature string) string {
 	var parts []string
 
-	// Leading blank line so the user has space to type before the signature.
+	// Cursor starts here — blank line at the top for typing.
 	parts = append(parts, "")
 
-	// Signature block (user signature + termite signature).
+	// Signature block below the cursor area.
 	sigBlock := buildSignatureBlock(accountSignature)
 	if sigBlock != "" {
 		parts = append(parts, sigBlock)
-	}
-
-	// Quoted history for replies and forwards.
-	if latest != nil && mode != "new" {
-		history := formatQuotedHistory(mode, latest)
-		if history != "" {
-			parts = append(parts, history)
-		}
 	}
 
 	return strings.Join(parts, "\n")

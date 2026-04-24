@@ -150,7 +150,7 @@ func (m Model) View() string {
 
 		bodyVal := m.body
 		if isActive {
-			bodyVal += cursor
+			bodyVal = insertCursor(bodyVal, m.bodyCursorPos, cursor)
 		}
 
 		bodyLines := strings.Split(bodyVal, "\n")
@@ -322,7 +322,7 @@ func (m Model) viewEmbedded() string {
 		label := lbl.Render("Body:")
 		bodyVal := m.body
 		if isActive {
-			bodyVal += cursor
+			bodyVal = insertCursor(bodyVal, m.bodyCursorPos, cursor)
 		}
 		bodyLines := strings.Split(bodyVal, "\n")
 		maxBodyLines := m.height - 10
@@ -444,4 +444,15 @@ func fieldName(idx int) string {
 	default:
 		return fmt.Sprintf("Field(%d)", idx)
 	}
+}
+
+// insertCursor inserts the cursor string at the given byte position in s.
+func insertCursor(s string, pos int, cursor string) string {
+	if pos < 0 {
+		pos = 0
+	}
+	if pos > len(s) {
+		pos = len(s)
+	}
+	return s[:pos] + cursor + s[pos:]
 }

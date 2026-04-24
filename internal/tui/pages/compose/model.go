@@ -49,6 +49,9 @@ type Model struct {
 
 	activeField int
 
+	// bodyCursorPos is the cursor position (byte offset) within the body field.
+	bodyCursorPos int
+
 	// embedded: compact layout when reply/forward is shown in the message column.
 	embedded bool
 }
