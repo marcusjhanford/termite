@@ -96,19 +96,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 // updateSelectProvider handles input on the provider selection step.
+// Only Gmail is supported on launch; other providers show as "coming soon".
 func (m Model) updateSelectProvider(keyStr string) (Model, tea.Cmd) {
 	switch keyStr {
 	case "1":
 		m.providerChoice = "gmail"
-		m.step = StepEnterEmail
-	case "2":
-		m.providerChoice = "outlook"
-		m.step = StepEnterEmail
-	case "3":
-		m.providerChoice = "fastmail"
-		m.step = StepEnterEmail
-	case "4":
-		m.providerChoice = "generic"
 		m.step = StepEnterEmail
 	}
 	return m, nil

@@ -36,12 +36,12 @@ func (m Model) View() string {
 			titleStyle.Render("Welcome to Termite"),
 			bodyStyle.Render("Select your email provider:"),
 			"",
-			bodyStyle.Render("  [1] Gmail"),
-			bodyStyle.Render("  [2] Outlook"),
-			bodyStyle.Render("  [3] Fastmail"),
-			bodyStyle.Render("  [4] Generic IMAP"),
+			bodyStyle.Render("  [1] Gmail (bring your own OAuth)"),
+			mutedStyle.Render("  [2] Outlook (coming soon)"),
+			mutedStyle.Render("  [3] Fastmail (coming soon)"),
+			mutedStyle.Render("  [4] Generic IMAP (coming soon)"),
 			"",
-			mutedStyle.Render("Press the number key to continue, Esc to go back."),
+			mutedStyle.Render("Press 1 to continue with Gmail, Esc to go back."),
 		)
 
 	case StepEnterEmail:
@@ -79,6 +79,9 @@ func (m Model) View() string {
 				"",
 				bodyStyle.Render("Your browser will open so you can sign in with your provider."),
 				bodyStyle.Render("Approve access there, then return here when the browser says you are done."),
+				"",
+				mutedStyle.Render("If you built from source, make sure you have set"),
+				mutedStyle.Render("TERMITE_GMAIL_CLIENT_ID and TERMITE_GMAIL_CLIENT_SECRET."),
 				"",
 				bodyStyle.Render(spinner+" "+m.authStatus),
 			)
